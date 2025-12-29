@@ -7,6 +7,17 @@ __pycache__/
 *.egg-info/
 .eggs/
 
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
 # Virtual Environment
 venv/
 env/

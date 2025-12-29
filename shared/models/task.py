@@ -149,7 +149,7 @@ class Task(BaseModel):
     task_type: TaskType = Field(..., description="Type of task")
     payload: Dict[str, Any] = Field(..., description="Task-specific payload data")
     metadata: TaskMetadata = Field(
-        default_factory=TaskMetadata, description="Task metadata"
+        default_factory=lambda: TaskMetadata(source=None), description="Task metadata"
     )
     model_version_id: Optional[str] = Field(
         None, description="Model version identifier (if applicable)"

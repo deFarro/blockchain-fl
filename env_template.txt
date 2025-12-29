@@ -16,12 +16,21 @@ IPFS_SWARM_PORT=4001
 IPFS_GATEWAY_PORT=8080
 IPFS_PROTOCOL=http
 
-# Vault Configuration
-VAULT_ADDR=http://vault:8200
-VAULT_PORT=8200
-VAULT_TOKEN=root-token
+# Encryption Key Configuration
+# Provide encryption key via ENCRYPTION_KEY environment variable
+# Must be a Base64-encoded 32-byte key
+#
+# Generate a key with:
+#   python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"
+#
+# IMPORTANT: Set this value in your .env file!
+ENCRYPTION_KEY=
 
-# Hyperledger Fabric Configuration
+# Blockchain Service Configuration
+BLOCKCHAIN_SERVICE_URL=http://blockchain-service:8080
+BLOCKCHAIN_SERVICE_PORT=8080
+
+# Hyperledger Fabric Configuration (used by blockchain-service)
 FABRIC_NETWORK_PROFILE=network.json
 FABRIC_CHANNEL_NAME=mychannel
 FABRIC_CHAINCODE_NAME=model_provenance

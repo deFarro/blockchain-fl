@@ -40,26 +40,26 @@ services:
     networks:
       - blockchain-fl-network
 
-  vault:
-    image: hashicorp/vault:latest
-    container_name: blockchain-fl-vault
-    ports:
-      - "${VAULT_PORT:-8200}:8200"
+  blockchain-service:
+    build:
+      context: .
+      dockerfile: blockchain_service/Dockerfile
+    container_name: blockchain-fl-blockchain-service
     environment:
-      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-root-token}
-      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-    cap_add:
-      - IPC_LOCK
-    volumes:
-      - vault_data:/vault/data
-    command: vault server -dev
+      - BLOCKCHAIN_SERVICE_PORT=${BLOCKCHAIN_SERVICE_PORT:-8080}
+      - FABRIC_NETWORK_PROFILE=${FABRIC_NETWORK_PROFILE:-network.json}
+      - FABRIC_CHANNEL_NAME=${FABRIC_CHANNEL_NAME:-mychannel}
+      - FABRIC_CHAINCODE_NAME=${FABRIC_CHAINCODE_NAME:-model_provenance}
+    ports:
+      - "${BLOCKCHAIN_SERVICE_PORT:-8080}:8080"
+    networks:
+      - blockchain-fl-network
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "vault", "status"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8080/health || curl -f http://localhost:8080/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - blockchain-fl-network
 
   main-service:
     build:
@@ -73,8 +73,8 @@ services:
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin}
       - IPFS_HOST=ipfs
       - IPFS_PORT=5001
-      - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=${VAULT_TOKEN:-root-token}
+      - BLOCKCHAIN_SERVICE_URL=http://blockchain-service:8080
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}  # Base64-encoded 32-byte key or master password
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ENVIRONMENT=${ENVIRONMENT:-development}
     volumes:
@@ -86,7 +86,7 @@ services:
         condition: service_healthy
       ipfs:
         condition: service_healthy
-      vault:
+      blockchain-service:
         condition: service_healthy
     networks:
       - blockchain-fl-network
@@ -125,7 +125,6 @@ volumes:
   rabbitmq_data:
   ipfs_data:
   ipfs_staging:
-  vault_data:
 
 networks:
   blockchain-fl-network:

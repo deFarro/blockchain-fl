@@ -48,6 +48,8 @@ class MNISTDataset(DatasetInterface):
 
         # If no client_id, return full dataset
         if client_id is None or num_clients is None:
+            if self._full_training_data is None:
+                raise RuntimeError("Training data not loaded")
             return self._full_training_data
 
         # Use provided seed or default
@@ -136,7 +138,10 @@ class MNISTDataset(DatasetInterface):
             self._test_data = datasets.MNIST(
                 root=self.data_dir, train=False, download=True, transform=self.transform
             )
-        return self._test_data
+        test_data = self._test_data
+        if test_data is None:
+            raise RuntimeError("Failed to load test data")
+        return test_data
 
     def get_num_classes(self) -> int:
         """Get number of classes in MNIST (10 digits)."""

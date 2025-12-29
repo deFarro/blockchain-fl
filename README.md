@@ -41,7 +41,7 @@ This document outlines the detailed architecture for the blockchain-enabled fede
 
 - Model weight aggregation (FedAvg)
 - Validation using test datasets (test datasets stored only in main service)
-- Blockchain transaction creation and submission
+- Blockchain transaction coordination (calls blockchain-service)
 - Off-chain storage management (IPFS)
 - Task queue management
 - UI/API for manual intervention
@@ -52,14 +52,39 @@ This document outlines the detailed architecture for the blockchain-enabled fede
 
 - **Queue Manager**: Manages task distribution (RabbitMQ)
 - **Aggregation Worker**: Combines client updates using federated averaging
-- **Blockchain Worker**: Creates transactions, interacts with Hyperledger Fabric
+- **Blockchain Client**: HTTP client that calls blockchain-service API
 - **Storage Worker**: Handles encryption/decryption and IPFS storage
 - **Validation Worker**: Runs test datasets and evaluates model performance
 - **Rollback Worker**: Manages model state restoration
 - **API Server**: REST API for manual task creation, monitoring, and manual rollback
 - **Web UI**: Dashboard for monitoring, manual intervention, and rollback management
 
-### 2. Client Service (Training Service)
+### 2. Blockchain Service (Go Microservice)
+
+**Responsibilities:**
+
+- All Hyperledger Fabric operations
+- Blockchain transaction creation and submission
+- Chaincode invocation using official Fabric Go SDK
+- Provenance chain management
+- Validation and rollback event recording
+
+**Architecture:**
+
+- Separate Go microservice (isolated from Python dependencies)
+- REST API for blockchain operations
+- Uses official Hyperledger Fabric Go SDK
+- Can be developed and deployed independently
+
+**API Endpoints:**
+
+- `POST /api/v1/model/register` - Register model version
+- `POST /api/v1/model/validate` - Record validation results
+- `POST /api/v1/model/rollback` - Record rollback event
+- `GET /api/v1/model/provenance/{version_id}` - Get provenance chain
+- `GET /health` - Health check
+
+### 3. Client Service (Training Service)
 
 **Responsibilities:**
 
@@ -95,8 +120,9 @@ Clients send weight updates (encrypted diffs) to a queue, which feeds into the A
 
 - Reads aggregated update
 - Computes hash of encrypted diff
-- Creates blockchain transaction (smart contract call)
-- Stores version hash, parent hash, timestamp, metadata
+- Calls blockchain-service API to create blockchain transaction
+- Blockchain service uses Fabric Go SDK to invoke chaincode
+- Stores version hash, parent hash, timestamp, metadata on-chain
 - Publishes task with blockchain hash to queue
 
 **Step 3: Storage Worker**
@@ -115,7 +141,7 @@ Clients send weight updates (encrypted diffs) to a queue, which feeds into the A
 - Decrypts and loads model weights
 - Applies diff to previous weights
 - Runs test dataset validation (test data stored only in main service)
-- Records validation results on blockchain
+- Calls blockchain-service API to record validation results on blockchain
 - Publishes validation result to queue
 
 **Step 5: Decision Worker**
@@ -545,58 +571,88 @@ Encrypted diff format includes: encrypted_diff (AES-256 encrypted weight diff by
 
 ### What's Written in Go?
 
-Only the **Hyperledger Fabric chaincode (smart contract)** is written in Go.
+**Blockchain Service** - A separate microservice that handles all Hyperledger Fabric operations.
 
-**Location:** main_service/blockchain/chaincode/model_provenance.go
+**Location:** `blockchain_service/`
 
 **Why Go?**
 
-- Hyperledger Fabric chaincode is required to be written in Go
-- Chaincode runs in a secure Docker container managed by Fabric
-- Cannot be written in Python (Fabric doesn't support Python chaincode natively)
+- Hyperledger Fabric has an official, well-maintained Go SDK
+- Avoids dependency conflicts with Python packages
+- Clean separation of concerns (blockchain logic isolated)
+- Better performance for blockchain operations
 
 **What it does:**
 
-- Defines data structures (ModelVersion, ValidationRecord, RollbackEvent)
-- Implements smart contract functions: RegisterModelUpdate, RecordValidation, RollbackModel, GetModelProvenance, VerifyIntegrity
-- Manages blockchain state (key-value store)
-- Enforces business logic on-chain
+- Provides REST API for blockchain operations
+- Interacts with Hyperledger Fabric using the official Go SDK
+- Implements blockchain operations: RegisterModelUpdate, RecordValidation, RollbackModel, GetModelProvenance
+- Manages Fabric network connections and transactions
+- Can be developed and deployed independently
 
-**Size:** Approximately 200-400 lines of Go code (relatively small, ~7% of codebase)
+**Architecture:**
 
-**Development:** Write once, deploy to blockchain network, tested via Fabric test framework, called from Python using Fabric SDK
+- Runs as a separate Docker container
+- Exposes HTTP REST API (port 8080)
+- Main service calls it via HTTP requests
+- Can be optionally disabled/mocked for development
+
+**Hyperledger Fabric Chaincode:**
+
+- Chaincode (smart contract) is also written in Go
+- Location: `main_service/blockchain/chaincode/model_provenance.go`
+- Defines data structures and smart contract functions
+- Runs in a secure Docker container managed by Fabric
 
 ### What's Written in Python?
 
-Everything else is written in Python (~93% of codebase).
+**Main Service** (~70% of codebase):
 
-**Main Service:**
-
-- All workers (aggregation, blockchain, storage, validation, rollback)
+- All workers (aggregation, storage, validation, rollback)
 - API server (FastAPI)
 - Queue consumers/producers
-- Blockchain client (interacts with Fabric via SDK)
+- Blockchain client (HTTP client that calls blockchain-service)
 - Storage management (IPFS)
 - Encryption/decryption
 - Validation logic
 - Web UI backend
 
-**Client Service:**
+**Client Service** (~20% of codebase):
 
 - Training engine
 - Model definitions
 - Queue consumers
 - Weight computation
 
-**Shared:**
+**Shared** (~10% of codebase):
 
 - Task models
 - Utilities
 - Configuration management
+- Dataset interfaces
 
-### Communication Between Go and Python
+### Communication Between Services
 
-Python services use the Hyperledger Fabric SDK (fabric-sdk-py) to call Go chaincode functions via gRPC. The chaincode runs in a Docker container managed by Fabric, and Python workers invoke chaincode methods like RegisterModelUpdate with parameters that the Go code processes and stores in blockchain state.
+**Python Main Service ↔ Go Blockchain Service:**
+
+- Main service calls blockchain service via HTTP REST API
+- Uses `httpx` (async HTTP client, already included with FastAPI)
+- No direct Fabric SDK dependencies in Python
+- Clean microservices architecture
+
+**Blockchain Service ↔ Hyperledger Fabric:**
+
+- Blockchain service uses the official Hyperledger Fabric Go SDK
+- Handles all Fabric network connections, transactions, and chaincode invocations
+- Isolated from Python dependency conflicts
+
+**Benefits of This Architecture:**
+
+- No dependency conflicts (Go service is isolated)
+- Uses official, maintained Fabric SDK
+- Clean separation of concerns
+- Can develop/test blockchain service independently
+- Main service stays focused on ML workloads
 
 ## Smart Contract Design
 
@@ -685,8 +741,8 @@ The smart contract implements the following functions:
 
 **IPFS Libraries:**
 
-- Python: ipfshttpclient
-- Alternative: Direct HTTP API calls to IPFS daemon
+- Python: httpx (async HTTP client, already included with FastAPI)
+- Direct HTTP API calls to IPFS daemon using async/await
 
 ### IPFS Benefits
 
@@ -1115,7 +1171,7 @@ This ensures:
 **1. Diff Encryption:**
 
 - Use AES-256-GCM for authenticated encryption
-- Key management: Store key hashes on-chain, keys in HashiCorp Vault (runs in docker-compose)
+- Key management: Encryption keys stored via ENCRYPTION_KEY environment variable (Base64-encoded 32-byte keys)
 - Each version can have unique encryption key
 
 **2. Integrity Verification:**
@@ -1180,7 +1236,7 @@ For TRAINING_COMPLETE tasks, the payload includes final_model_info containing: f
 - **Queue:** RabbitMQ
 - **Blockchain:** Hyperledger Fabric 2.5+
 - **Storage:** IPFS (InterPlanetary File System)
-  - Python library: ipfshttpclient
+  - Python library: httpx (async HTTP client for IPFS API)
   - IPFS daemon: Run locally or connect to network
 - **ML Framework:** PyTorch
 - **Federated Learning:** PySyft
@@ -1189,28 +1245,36 @@ For TRAINING_COMPLETE tasks, the payload includes final_model_info containing: f
 
 ### Project Structure
 
-- main_service/
-  - workers/ (aggregation_worker.py, blockchain_worker.py, storage_worker.py, validation_worker.py, rollback_worker.py)
+- main_service/ (Python)
+  - workers/ (aggregation_worker.py, storage_worker.py, validation_worker.py, rollback_worker.py)
   - api/ (server.py, routes.py)
-  - blockchain/ (fabric_client.py, chaincode/model_provenance.go)
+  - blockchain/ (fabric_client.py - HTTP client for blockchain-service, chaincode/model_provenance.go)
   - storage/ (ipfs_client.py, encryption.py)
-  - config.py
-- client_service/
+  - requirements.txt
+  - Dockerfile
+- blockchain_service/ (Go)
+  - main.go (REST API server)
+  - go.mod, go.sum
+  - Dockerfile
+  - README.md
+- client_service/ (Python)
   - training/ (trainer.py, model.py)
   - queue/ (consumer.py)
   - config.py
-- shared/
+  - requirements.txt
+  - Dockerfile
+- shared/ (Python)
   - models/ (task.py)
-  - utils/ (crypto.py)
+  - utils/ (crypto.py, hashing.py)
   - datasets/ (dataset_interface.py, mnist_dataset.py)
+  - config.py
+  - logger.py
 - scripts/
-  - prepare_datasets.py (dataset preprocessing and splitting script)
-- data/ (created by preprocessing script)
-  - mnist/
-    - train/ (client_0.pt, client_1.pt, ...)
-    - test/ (test.pt)
-    - config/ (client_X_config.json, main_service_config.json, metadata.json)
+  - generate_encryption_key.py
+- data/ (created at runtime)
+  - mnist/ (downloaded by torchvision)
 - tests/
+- docker-compose.yml
 
 ## Addressing Research Questions
 

@@ -1,6 +1,7 @@
 """Shared configuration management."""
 
 from pathlib import Path
+from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 
@@ -25,16 +26,17 @@ class Settings(BaseSettings):
     ipfs_port: int = 5001
     ipfs_protocol: str = "http"
 
-    # Vault Configuration
-    vault_addr: str = (
-        "http://vault:8200"  # Use service name in Docker, localhost for local dev
-    )
-    vault_token: str = "root-token"
+    # Encryption Key Configuration
+    # Key provided via ENCRYPTION_KEY environment variable
+    # Must be a Base64-encoded 32-byte key
+    # Generate with: python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"
+    encryption_key: Optional[str] = None
 
-    # Hyperledger Fabric Configuration
-    fabric_network_profile: str = "network.json"
-    fabric_channel_name: str = "mychannel"
-    fabric_chaincode_name: str = "model_provenance"
+    # Blockchain Service Configuration
+    # Blockchain service is a separate Go microservice
+    blockchain_service_url: str = (
+        "http://blockchain-service:8080"  # Use service name in Docker, localhost for local dev
+    )
 
     # Application Configuration
     log_level: str = "INFO"
@@ -63,6 +65,41 @@ class Settings(BaseSettings):
     def ipfs_url(self) -> str:
         """Get IPFS API URL."""
         return f"{self.ipfs_protocol}://{self.ipfs_host}:{self.ipfs_port}"
+
+    def get_encryption_key(self) -> bytes:
+        """
+        Get encryption key from ENCRYPTION_KEY environment variable.
+
+        Expects a Base64-encoded 32-byte key.
+
+        Returns:
+            bytes: 32-byte encryption key
+
+        Raises:
+            ValueError: If ENCRYPTION_KEY is not set or invalid
+        """
+        import base64
+        from shared.utils.crypto import AES256GCM
+
+        if not self.encryption_key:
+            raise ValueError(
+                "ENCRYPTION_KEY environment variable is required. "
+                'Generate a key with: python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"'
+            )
+
+        # Decode Base64-encoded key
+        try:
+            key = base64.b64decode(self.encryption_key)
+            if len(key) != AES256GCM.KEY_SIZE:
+                raise ValueError(
+                    f"Encryption key must be {AES256GCM.KEY_SIZE} bytes after Base64 decoding, "
+                    f"got {len(key)} bytes"
+                )
+            return key
+        except Exception as e:
+            raise ValueError(
+                f"Invalid ENCRYPTION_KEY: must be a valid Base64-encoded 32-byte key. Error: {str(e)}"
+            ) from e
 
 
 # Global settings instance
