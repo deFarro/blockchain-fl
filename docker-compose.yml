@@ -96,18 +96,20 @@ services:
     build:
       context: .
       dockerfile: client_service/Dockerfile
-    container_name: blockchain-fl-client-service
+    # No container_name - allows scaling with docker-compose up --scale
+    # Containers will be named: blockchain-fl-client-service-1, blockchain-fl-client-service-2, etc.
     environment:
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_USER:-admin}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin}
-      - CLIENT_ID=${CLIENT_ID:-client_0}
-      - CLIENT_DATASET_PATH=${CLIENT_DATASET_PATH:-data/mnist/train/client_0.pt}
+      - NUM_CLIENTS=${NUM_CLIENTS:-2}  # Total number of client replicas
+      - SPLIT_TYPE=${SPLIT_TYPE:-iid}  # iid or non_iid
+      - DATASET_SEED=${DATASET_SEED:-42}  # Seed for dataset splitting
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ENVIRONMENT=${ENVIRONMENT:-development}
     volumes:
-      - ./data:/app/data:ro  # Read-only access to data directory
+      - ./data:/app/data  # For MNIST dataset download
       - ./shared:/app/shared  # Mount shared code
       - ./client_service:/app/client_service  # Mount client service code
     depends_on:
@@ -116,8 +118,8 @@ services:
     networks:
       - blockchain-fl-network
     restart: unless-stopped
-    deploy:
-      replicas: 1  # Can be scaled up for multiple clients
+    # Use: docker-compose up --scale client-service=2
+    # Each replica gets unique HOSTNAME: blockchain-fl-client-service-1, blockchain-fl-client-service-2, etc.
 
 volumes:
   rabbitmq_data:
