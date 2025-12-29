@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: blockchain-fl-rabbitmq
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"      # AMQP port
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"    # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - blockchain-fl-network
+
+  ipfs:
+    image: ipfs/kubo:latest
+    container_name: blockchain-fl-ipfs
+    ports:
+      - "${IPFS_SWARM_PORT:-4001}:4001"      # Swarm
+      - "${IPFS_API_PORT:-5001}:5001"      # API
+      - "${IPFS_GATEWAY_PORT:-8080}:8080"      # Gateway
+    environment:
+      IPFS_PROFILE: server
+    volumes:
+      - ipfs_data:/data/ipfs
+      - ipfs_staging:/data/ipfs/staging
+    healthcheck:
+      test: ["CMD", "ipfs", "version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - blockchain-fl-network
+
+  vault:
+    image: hashicorp/vault:latest
+    container_name: blockchain-fl-vault
+    ports:
+      - "${VAULT_PORT:-8200}:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-root-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - vault_data:/vault/data
+    command: vault server -dev
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - blockchain-fl-network
+
+  main-service:
+    build:
+      context: .
+      dockerfile: main_service/Dockerfile
+    container_name: blockchain-fl-main-service
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-admin}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin}
+      - IPFS_HOST=ipfs
+      - IPFS_PORT=5001
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=${VAULT_TOKEN:-root-token}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+    volumes:
+      - ./data:/app/data:ro  # Read-only access to data directory
+      - ./shared:/app/shared  # Mount shared code
+      - ./main_service:/app/main_service  # Mount main service code
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      ipfs:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - blockchain-fl-network
+    restart: unless-stopped
+
+  client-service:
+    build:
+      context: .
+      dockerfile: client_service/Dockerfile
+    container_name: blockchain-fl-client-service
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-admin}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin}
+      - CLIENT_ID=${CLIENT_ID:-client_0}
+      - CLIENT_DATASET_PATH=${CLIENT_DATASET_PATH:-data/mnist/train/client_0.pt}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+    volumes:
+      - ./data:/app/data:ro  # Read-only access to data directory
+      - ./shared:/app/shared  # Mount shared code
+      - ./client_service:/app/client_service  # Mount client service code
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - blockchain-fl-network
+    restart: unless-stopped
+    deploy:
+      replicas: 1  # Can be scaled up for multiple clients
+
+volumes:
+  rabbitmq_data:
+  ipfs_data:
+  ipfs_staging:
+  vault_data:
+
+networks:
+  blockchain-fl-network:
+    driver: bridge

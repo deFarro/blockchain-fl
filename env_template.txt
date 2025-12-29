@@ -1,0 +1,39 @@
+# Environment Configuration Template
+# Copy this content to a .env file and update with your values
+
+# RabbitMQ Configuration
+RABBITMQ_HOST=rabbitmq
+RABBITMQ_PORT=5672
+RABBITMQ_MGMT_PORT=15672
+RABBITMQ_USER=admin
+RABBITMQ_PASSWORD=admin
+RABBITMQ_VHOST=/
+
+# IPFS Configuration
+IPFS_HOST=ipfs
+IPFS_PORT=5001
+IPFS_SWARM_PORT=4001
+IPFS_GATEWAY_PORT=8080
+IPFS_PROTOCOL=http
+
+# Vault Configuration
+VAULT_ADDR=http://vault:8200
+VAULT_PORT=8200
+VAULT_TOKEN=root-token
+
+# Hyperledger Fabric Configuration
+FABRIC_NETWORK_PROFILE=network.json
+FABRIC_CHANNEL_NAME=mychannel
+FABRIC_CHAINCODE_NAME=model_provenance
+
+# Application Configuration
+LOG_LEVEL=INFO
+ENVIRONMENT=development
+
+# Client Configuration
+CLIENT_ID=client_0
+CLIENT_DATASET_PATH=data/mnist/train/client_0.pt
+
+# Main Service Configuration
+TEST_DATASET_PATH=data/mnist/test/test.pt
+
