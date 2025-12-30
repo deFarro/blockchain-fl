@@ -51,7 +51,7 @@ class StorageWorker:
 
         Args:
             aggregated_diff_str: Aggregated diff as JSON string
-            blockchain_hash: Hash from blockchain transaction (expected hash of encrypted diff)
+            blockchain_hash: Hash from blockchain transaction (hash of unencrypted diff for content integrity)
             model_version_id: Model version identifier
 
         Returns:
@@ -64,28 +64,27 @@ class StorageWorker:
         # Convert diff string to bytes
         diff_bytes = aggregated_diff_str.encode("utf-8")
 
-        # Encrypt the diff
-        logger.info(f"Encrypting aggregated diff for version {model_version_id}")
-        encrypted_diff = self.encryption_service.encrypt_diff(diff_bytes)
-        logger.debug(
-            f"Encrypted {len(diff_bytes)} bytes to {len(encrypted_diff)} bytes"
-        )
+        # Verify hash of unencrypted diff matches blockchain hash (content integrity check)
+        diff_hash = compute_hash(diff_bytes)
+        logger.debug(f"Computed hash of unencrypted diff: {diff_hash}")
 
-        # Compute hash of encrypted diff
-        encrypted_hash = compute_hash(encrypted_diff)
-        logger.debug(f"Computed hash of encrypted diff: {encrypted_hash}")
-
-        # Verify hash matches blockchain hash
-        if encrypted_hash != blockchain_hash:
+        if diff_hash != blockchain_hash:
             error_msg = (
-                f"Hash mismatch! Encrypted diff hash: {encrypted_hash}, "
+                f"Hash mismatch! Diff hash: {diff_hash}, "
                 f"Blockchain hash: {blockchain_hash}"
             )
             logger.error(error_msg)
             raise ValueError(error_msg)
 
         logger.info(
-            "✓ Hash verification passed - encrypted diff matches blockchain hash"
+            "✓ Hash verification passed - diff content matches blockchain hash"
+        )
+
+        # Encrypt the diff
+        logger.info(f"Encrypting aggregated diff for version {model_version_id}")
+        encrypted_diff = self.encryption_service.encrypt_diff(diff_bytes)
+        logger.debug(
+            f"Encrypted {len(diff_bytes)} bytes to {len(encrypted_diff)} bytes"
         )
 
         # Upload to IPFS

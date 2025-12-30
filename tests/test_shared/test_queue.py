@@ -4,6 +4,7 @@
 import sys
 import os
 import time
+import threading
 from pathlib import Path
 
 # Add project root to path
@@ -47,52 +48,91 @@ def test_publish_subscribe():
 
     # Test publisher
     received_tasks = []
+    stop_flag = threading.Event()
 
     def message_handler(task: Task):
         """Handle received task."""
         print(f"✓ Received task: {task.task_id} (type: {task.task_type})")
         received_tasks.append(task)
-
-    # Start consumer in a separate thread (simplified - in real usage, use threading)
-    print("\nStarting consumer...")
-    print("(Note: This is a blocking test. Press Ctrl+C to stop)")
+        # Stop after receiving 2 messages
+        if len(received_tasks) >= 2:
+            stop_flag.set()
 
     try:
-        # Test 1: Publish a message
+        # Test 1: Publish messages first
         with QueuePublisher() as publisher:
             publisher.publish_task(test_task, test_queue)
-            print(f"✓ Published task to queue: {test_queue}")
+            print(f"✓ Published task 1 to queue: {test_queue}")
 
-        # Test 2: Consume the message
-        print("\nConsuming messages (will wait for 5 seconds)...")
-        with QueueConsumer() as consumer:
-            # Start consuming in a non-blocking way for testing
-            import threading
+            # Publish second message
+            test_task_2 = Task(
+                task_id="test-task-002",
+                task_type=TaskType.TRAIN,
+                payload=TrainTaskPayload(
+                    weights_cid=None,
+                    iteration=2,
+                    client_id="client_1",
+                ).model_dump(),
+                metadata=TaskMetadata(source="test_script"),
+            )
+            publisher.publish_task(test_task_2, test_queue)
+            print(f"✓ Published task 2 to queue: {test_queue}")
 
-            def consume():
-                try:
-                    consumer.consume_tasks(test_queue, message_handler)
-                except KeyboardInterrupt:
-                    pass
+        # Test 2: Consume the messages using threading with timeout
+        print("\nConsuming messages (with timeout)...")
 
-            consumer_thread = threading.Thread(target=consume, daemon=True)
-            consumer_thread.start()
+        def consume_with_timeout():
+            """Consume messages with a timeout."""
+            consumer = None
+            try:
+                consumer = QueueConsumer()
+                consumer.consume_tasks(test_queue, message_handler)
+            except (KeyboardInterrupt, SystemExit):
+                # Expected when stopping
+                pass
+            except Exception as e:
+                # Connection errors are expected when stopping/closing
+                error_str = str(e).lower()
+                if not any(
+                    keyword in error_str
+                    for keyword in [
+                        "closed",
+                        "bad file descriptor",
+                        "channel",
+                        "closing",
+                        "connection lost",
+                        "stream connection",
+                    ]
+                ):
+                    # Only log unexpected errors
+                    logger.warning(f"Consumer error (may be expected): {e}")
+            finally:
+                # Try to stop gracefully, but ignore all errors
+                if consumer:
+                    try:
+                        if hasattr(consumer, "_consuming") and consumer._consuming:
+                            consumer.stop()
+                    except Exception:
+                        pass  # Ignore all errors when stopping
+                    try:
+                        consumer.close()
+                    except Exception:
+                        pass  # Ignore all errors when closing
 
-            # Wait a bit for message to be consumed
-            time.sleep(2)
+        # Start consumer in a daemon thread
+        consumer_thread = threading.Thread(target=consume_with_timeout, daemon=True)
+        consumer_thread.start()
 
-            # Publish another message while consumer is running
-            with QueuePublisher() as publisher:
-                publisher.publish_task(test_task, test_queue)
-                print(f"✓ Published another task while consumer is running")
+        # Wait for messages (up to 5 seconds)
+        time.sleep(5)
 
-            # Wait for consumption
-            time.sleep(3)
-
-            consumer.stop()
+        # The thread will be cleaned up automatically as a daemon thread
+        # No need to explicitly stop it - just verify we received messages
 
         # Verify
-        assert len(received_tasks) > 0, "No tasks were received"
+        assert (
+            len(received_tasks) >= 1
+        ), f"Expected at least 1 task, got {len(received_tasks)}"
         print(f"\n✓ Success! Received {len(received_tasks)} task(s)")
         for task in received_tasks:
             print(f"  - Task ID: {task.task_id}, Type: {task.task_type}")

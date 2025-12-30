@@ -70,14 +70,9 @@ def test_storage_worker_encrypt_and_store():
     # Create storage worker
     worker = StorageWorker()
 
-    # Mock encryption to return a fixed, predictable value
-    # (AES-GCM is non-deterministic, so we need to mock it for consistent hashing)
+    # Compute hash of unencrypted diff (content integrity check)
     diff_bytes = aggregated_diff_str.encode("utf-8")
-    fixed_encrypted_diff = b"fixed_encrypted_diff_for_testing_" + diff_bytes[:10]
-    expected_hash = compute_hash(fixed_encrypted_diff)
-
-    # Mock the encryption service to return the fixed encrypted value
-    worker.encryption_service.encrypt_diff = Mock(return_value=fixed_encrypted_diff)
+    expected_hash = compute_hash(diff_bytes)
 
     # Mock IPFS client
     mock_cid = "QmTest123456789"
@@ -101,13 +96,13 @@ def test_storage_worker_encrypt_and_store():
             assert cid == mock_cid
             print(f"✓ Encrypt and store successful: CID={cid}")
 
-            # Verify encryption was called
-            worker.encryption_service.encrypt_diff.assert_called_once_with(diff_bytes)
-
-            # Verify IPFS was called
-            mock_client.add_bytes.assert_called_once_with(
-                fixed_encrypted_diff, pin=True
-            )
+            # Verify IPFS was called (with encrypted diff)
+            # Note: We can't verify the exact encrypted value since AES-GCM is non-deterministic
+            # But we can verify it was called with some encrypted bytes
+            assert mock_client.add_bytes.called
+            call_args = mock_client.add_bytes.call_args
+            assert call_args[1]["pin"] is True
+            assert isinstance(call_args[0][0], bytes)
             mock_client.pin_ls.assert_called_once()
 
     asyncio.run(run_test())
@@ -170,14 +165,9 @@ def test_storage_worker_handle_task():
     # Create storage worker
     worker = StorageWorker()
 
-    # Mock encryption to return a fixed, predictable value
-    # (AES-GCM is non-deterministic, so we need to mock it for consistent hashing)
+    # Compute hash of unencrypted diff (content integrity check)
     diff_bytes = aggregated_diff_str.encode("utf-8")
-    fixed_encrypted_diff = b"fixed_encrypted_diff_for_testing_" + diff_bytes[:10]
-    expected_hash = compute_hash(fixed_encrypted_diff)
-
-    # Mock the encryption service to return the fixed encrypted value
-    worker.encryption_service.encrypt_diff = Mock(return_value=fixed_encrypted_diff)
+    expected_hash = compute_hash(diff_bytes)
 
     # Mock publisher
     mock_publisher = Mock()
@@ -226,13 +216,13 @@ def test_storage_worker_handle_task():
             assert cid == mock_cid
             print("✓ Task handling successful")
 
-            # Verify encryption was called
-            worker.encryption_service.encrypt_diff.assert_called_once_with(diff_bytes)
-
-            # Verify IPFS was called with the fixed encrypted diff
-            mock_client.add_bytes.assert_called_once_with(
-                fixed_encrypted_diff, pin=True
-            )
+            # Verify IPFS was called (with encrypted diff)
+            # Note: We can't verify the exact encrypted value since AES-GCM is non-deterministic
+            # But we can verify it was called with some encrypted bytes
+            assert mock_client.add_bytes.called
+            call_args = mock_client.add_bytes.call_args
+            assert call_args[1]["pin"] is True
+            assert isinstance(call_args[0][0], bytes)
 
             # Verify VALIDATE task was published
             assert mock_publisher.publish_task.called
@@ -323,14 +313,9 @@ async def test_storage_worker_ipfs_integration():
         # Create storage worker
         worker = StorageWorker()
 
-        # Mock encryption to return a fixed, predictable value
-        # (AES-GCM is non-deterministic, so we need to mock it for consistent hashing)
+        # Compute hash of unencrypted diff (content integrity check)
         diff_bytes = aggregated_diff_str.encode("utf-8")
-        fixed_encrypted_diff = b"fixed_encrypted_diff_for_testing_" + diff_bytes[:10]
-        expected_hash = compute_hash(fixed_encrypted_diff)
-
-        # Mock the encryption service to return the fixed encrypted value
-        worker.encryption_service.encrypt_diff = Mock(return_value=fixed_encrypted_diff)
+        expected_hash = compute_hash(diff_bytes)
 
         # Test with real IPFS
         cid = await worker._encrypt_and_store(
@@ -343,8 +328,13 @@ async def test_storage_worker_ipfs_integration():
         # Verify we can retrieve it
         async with IPFSClient() as ipfs_client:
             retrieved = await ipfs_client.get_bytes(cid)
-            assert retrieved == fixed_encrypted_diff
-            print("✓ Retrieved encrypted diff from IPFS matches")
+            # Verify it's encrypted (should be bytes, not the original diff)
+            assert isinstance(retrieved, bytes)
+            assert len(retrieved) > 0
+            # Decrypt to verify it matches original
+            decrypted = worker.encryption_service.decrypt_diff(retrieved)
+            assert decrypted == diff_bytes
+            print("✓ Retrieved and decrypted diff from IPFS matches original")
 
     except Exception as e:
         print(f"⚠ IPFS not available: {str(e)}")
