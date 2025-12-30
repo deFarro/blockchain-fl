@@ -48,11 +48,11 @@ test-shared:
 
 test-main:
 	@echo "Running main service tests..."
-	@pytest tests/test_main/ -v || echo "ℹ No main service tests found yet"
+	@pytest tests/test_main/ -v || (echo "✗ Main service tests failed" && exit 1)
 
 test-client:
 	@echo "Running client service tests..."
-	@pytest tests/test_client/ -v || echo "ℹ No client service tests found yet"
+	@pytest tests/test_client/ -v || (echo "✗ Client service tests failed" && exit 1)
 
 test-blockchain:
 	@echo "Running blockchain service tests (Go)..."
