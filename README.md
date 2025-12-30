@@ -144,13 +144,19 @@ Clients send weight updates (encrypted diffs) to a queue, which feeds into the A
 - Calls blockchain-service API to record validation results on blockchain
 - Publishes validation result to queue
 
-**Step 5: Decision Worker**
+**Step 5: Main Service Decision Logic**
 
 - Reads validation result
 - Evaluates model performance using rollback strategy (see Rollback Strategy section below)
-- If rollback needed: Publishes rollback task
+- **Iteration Coordination**: Main service controls when clients start next iteration
+  - Clients are passive: They only train when they receive TRAIN tasks
+  - Main service is active: Publishes TRAIN tasks only after validation passes
+  - **Late Updates**: Updates for past iterations are rejected (logged and ignored)
+- If rollback needed:
+  - Option 1: Rollback entire iteration (standard approach)
+  - Option 2: Run regression diagnosis to identify problematic client(s) and exclude them (see Regression Diagnosis section)
 - If PASS: Checks if training is complete (based on criteria like accuracy threshold, max iterations, or manual trigger)
-  - If training continues: Publishes new training task to clients
+  - If training continues: Publishes TRAIN tasks for **next iteration** (with new aggregated weights CID)
   - If training complete: Publishes TRAINING_COMPLETE task with final model information
 - Updates model registry
 
@@ -450,6 +456,57 @@ The system determines when training is complete based on multiple criteria. Trai
 - Training stops and current best model is marked as final
 - Can indicate need for investigation (data quality, client issues)
 
+### Regression Diagnosis
+
+When a model regression is detected (accuracy drops), the system can diagnose which client(s) caused the regression by testing each client's diff individually.
+
+**How It Works:**
+
+1. **Normal Aggregation (First)**: Aggregate ALL client diffs using FedAvg (no filtering overhead)
+
+2. **If Regression Detected**: Run regression diagnosis:
+
+   - For each client that contributed to the problematic iteration:
+     - Load previous model weights (before problematic iteration)
+     - Apply **only this client's diff**
+     - Validate on test dataset
+     - Compare accuracy with baseline
+   - Identify which client(s) caused the regression
+
+3. **Exclude from Future Iterations**: When `enable_client_exclusion=True` and problematic clients identified:
+   - Add problematic client IDs to `excluded_clients` list
+   - **Future aggregations** will filter out excluded clients
+   - Only "good" clients participate in future iterations
+   - System continues training without problematic clients
+
+**Key Point**: Exclusion only happens AFTER regression diagnosis. Normal aggregation includes ALL clients (optimized for common case - no regression).
+
+**Example:**
+
+```
+Iteration 24: Clients 1, 2, 3 → Regression detected (95% → 92%)
+
+Diagnosis:
+  Test Client 1 diff alone → 94.5% (OK)
+  Test Client 2 diff alone → 94.8% (OK)
+  Test Client 3 diff alone → 88.0% (REGRESSION!)
+
+Result: Exclude Client 3 from future iterations
+```
+
+**Configuration:**
+
+- `enable_client_exclusion`: Enable/disable client exclusion
+- `excluded_clients`: List of client IDs to exclude from aggregation
+
+**Limitations:**
+
+- Currently tests each client individually (future: test combinations)
+- Requires access to previous weights and test dataset
+- No automatic re-inclusion (manual re-enable required)
+
+See `docs/REGRESSION_DIAGNOSIS.md` for detailed documentation.
+
 **5. Manual Completion Trigger:**
 
 - Operator manually triggers training completion via API/UI
@@ -677,7 +734,9 @@ The smart contract implements the following functions:
 - Version ID (unique identifier)
 - Parent Version ID (previous version for lineage)
 - Timestamp (when created)
-- Client IDs (which clients contributed)
+- **Iteration (training iteration number - e.g., 1, 2, 3...) - This is the CURRENT iteration when stored**
+- Num Clients (number of clients that participated in aggregation)
+- Client IDs (list of client IDs that contributed to this version)
 - Aggregated Hash (SHA-256 of aggregated weights)
 - Diff Hash (SHA-256 of encrypted diff)
 - Off-Chain Location (IPFS CID)
@@ -685,6 +744,13 @@ The smart contract implements the following functions:
 - Validation Status (pending/passed/failed)
 - Validation Metrics (JSON string of metrics)
 - Block Number (for audit trail)
+
+**Note**: The iteration number stored on-chain represents the current/latest iteration. This allows:
+
+- Late update rejection (check if update iteration < on-chain current iteration)
+- Iteration coordination across services
+- Preventing replay attacks
+- Ensuring all services agree on the current iteration
 
 **Validation Records:**
 

@@ -1,7 +1,7 @@
 """Shared configuration management."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 
@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     # Application Configuration
     log_level: str = "INFO"
     environment: str = "development"
+
+    # Aggregation Configuration (for main service)
+    min_clients_for_aggregation: int = 2
+    aggregation_timeout: int = 30  # seconds to wait for client updates
+
+    # Client Exclusion Configuration (for regression diagnosis)
+    enable_client_exclusion: bool = (
+        False  # Enable client exclusion after regression diagnosis
+    )
+    excluded_clients: List[str] = []  # List of client IDs to exclude from aggregation
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
@@ -104,4 +114,3 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
-
