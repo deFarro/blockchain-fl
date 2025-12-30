@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, Dataset
 from typing import Optional, Dict, Any, Tuple, cast
 from client_service.training.model import SimpleCNN
 from client_service.config import config
-from shared.datasets.mnist_dataset import MNISTDataset
+from shared.datasets import get_dataset
 from shared.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -75,9 +75,11 @@ class Trainer:
         if client_id is None:
             client_id = config.get_client_id()
 
-        # Load dataset
-        dataset_loader = MNISTDataset(
-            data_dir=config.data_dir, seed=config.dataset_seed
+        # Load dataset using factory function
+        dataset_loader = get_dataset(
+            dataset_name=getattr(config, 'dataset_name', None),
+            data_dir=str(config.data_dir),
+            seed=config.dataset_seed,
         )
         train_dataset = dataset_loader.load_training_data(
             client_id=client_id,
