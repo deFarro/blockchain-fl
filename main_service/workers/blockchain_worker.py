@@ -149,12 +149,35 @@ class BlockchainWorker:
         # Compute hash of unencrypted diff (content integrity check)
         blockchain_hash = self._compute_diff_hash(aggregated_diff_str)
 
+        # Get parent metadata to carry forward rollback_count and validation_history
+        parent_metadata = {}
+        rollback_count = 0
+        validation_history = []
+
+        if parent_version_id:
+            try:
+                async with FabricClient() as blockchain_client:
+                    parent_provenance = await blockchain_client.get_model_provenance(
+                        parent_version_id
+                    )
+                    parent_metadata = parent_provenance.get("metadata", {})
+                    rollback_count = parent_metadata.get("rollback_count", 0)
+                    validation_history = parent_metadata.get("validation_history", [])
+            except Exception as e:
+                logger.warning(
+                    f"Could not fetch parent metadata for {parent_version_id}: {e}. "
+                    "Starting with fresh metadata."
+                )
+
         # Prepare metadata for blockchain
+        # Carry forward rollback_count and validation_history from parent
         metadata = {
             "iteration": iteration,
             "num_clients": num_clients,
             "client_ids": client_ids,
             "diff_hash": blockchain_hash,  # Hash of encrypted diff
+            "rollback_count": rollback_count,  # Carried forward from parent
+            "validation_history": validation_history,  # Carried forward from parent
             # ipfs_cid will be added later by storage worker
         }
 
@@ -166,8 +189,9 @@ class BlockchainWorker:
             metadata=metadata,
         )
 
-        # Update current model version
+        # Update current and latest model version
         self.current_model_version_id = model_version_id
+        self.latest_model_version_id = model_version_id
 
         return {
             "model_version_id": model_version_id,
@@ -299,6 +323,15 @@ class BlockchainWorker:
                 )
 
         self.consumer.consume_tasks(queue_name, task_handler)
+
+    def get_latest_model_version_id(self) -> Optional[str]:
+        """
+        Get the latest model version ID.
+
+        Returns:
+            Latest model version ID, or None if no versions exist
+        """
+        return self.latest_model_version_id
 
     def stop(self) -> None:
         """Stop blockchain worker."""

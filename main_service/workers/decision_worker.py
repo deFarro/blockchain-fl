@@ -389,6 +389,7 @@ class DecisionWorker:
                     self._publish_training_complete_task(
                         final_result, "Maximum rollbacks reached"
                     )
+                    # Update shared state
                     return True
 
                 # Validate best checkpoint exists
@@ -401,6 +402,7 @@ class DecisionWorker:
 
                 # Publish rollback task
                 self.state.rollback_count += 1
+                # Update shared state
                 self._publish_rollback_task(
                     target_version_id=self.state.best_checkpoint_version,
                     target_weights_cid=self.state.best_checkpoint_cid,
@@ -435,6 +437,7 @@ class DecisionWorker:
                 self._publish_training_complete_task(
                     validation_result, completion_reason
                 )
+                # Update shared state
                 logger.info(f"✓ Training completed: {completion_reason}")
                 return True
 

@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     environment: str = "development"
 
+    # API Configuration
+    api_key: Optional[str] = None  # API key for authentication
+    api_host: str = "0.0.0.0"  # API server host
+    api_port: int = 8000  # API server port
+
     # Aggregation Configuration (for main service)
     min_clients_for_aggregation: int = 2
     aggregation_timeout: int = 30  # seconds to wait for client updates

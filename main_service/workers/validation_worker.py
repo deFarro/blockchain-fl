@@ -18,6 +18,7 @@ from shared.models.task import (
 )
 from shared.storage.encryption import EncryptionService
 from main_service.storage.ipfs_client import IPFSClient
+from main_service.blockchain.fabric_client import FabricClient
 from shared.datasets import get_dataset, DatasetInterface
 from client_service.training.model import SimpleCNN
 from shared.config import settings
@@ -272,6 +273,30 @@ class ValidationWorker:
             validation_result = loop.run_until_complete(
                 self._validate_model(ipfs_cid, model_version_id, parent_version_id)
             )
+
+            # Record validation on blockchain (async)
+            metrics = validation_result.get("metrics", {})
+            accuracy = metrics.get("accuracy", 0.0)
+            try:
+                loop = asyncio.get_event_loop()
+
+                async def record_validation_async():
+                    async with FabricClient() as blockchain_client:
+                        await blockchain_client.record_validation(
+                            model_version_id=model_version_id,
+                            accuracy=accuracy,
+                            metrics=metrics,
+                        )
+
+                loop.run_until_complete(record_validation_async())
+                logger.info(
+                    f"✓ Validation recorded on blockchain for version {model_version_id}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to record validation on blockchain: {e}", exc_info=True
+                )
+                # Continue anyway - validation result is still published
 
             # For now, always pass validation (rollback logic will be in decision worker)
             # TODO: Add basic rollback check here if needed
