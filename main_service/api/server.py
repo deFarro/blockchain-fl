@@ -1,7 +1,10 @@
 """FastAPI server for main service API."""
 
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from shared.logger import setup_logger
 from main_service.api import routes
 
@@ -23,7 +26,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
+# Serve dashboard (built React app) - must be before router to catch root route
+dashboard_path = Path(__file__).parent.parent.parent / "dashboard" / "dist"
+if dashboard_path.exists() and (dashboard_path / "index.html").exists():
+    # Serve static files from dist directory
+    app.mount(
+        "/dashboard",
+        StaticFiles(directory=str(dashboard_path), html=True),
+        name="dashboard",
+    )
+
+    @app.get("/")
+    async def root():
+        """Serve dashboard index."""
+        return FileResponse(dashboard_path / "index.html")
+
+
+# Include routers (after dashboard routes)
 app.include_router(routes.router)
 
 
@@ -48,4 +67,3 @@ if __name__ == "__main__":
 
     logger.info(f"Starting API server on {host}:{port}")
     uvicorn.run(app, host=host, port=port)
-

@@ -76,7 +76,7 @@ def test_validation_worker_retrieve_and_decrypt_diff():
     # Serialize and encrypt diff
     diff_str = serialize_diff(diff)
     diff_bytes = diff_str.encode("utf-8")
-    
+
     key = AES256GCM.generate_key()
     encryption_service = EncryptionService(key=key)
     encrypted_diff = encryption_service.encrypt_diff(diff_bytes)
@@ -89,7 +89,9 @@ def test_validation_worker_retrieve_and_decrypt_diff():
     mock_cid = "QmTest123456789"
 
     async def run_test():
-        with patch("main_service.workers.validation_worker.IPFSClient") as mock_ipfs_class:
+        with patch(
+            "main_service.workers.validation_worker.IPFSClient"
+        ) as mock_ipfs_class:
             mock_client = AsyncMock()
             mock_client.get_bytes = AsyncMock(return_value=encrypted_diff)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -131,8 +133,10 @@ def test_validation_worker_evaluate_model():
     assert 0 <= metrics["accuracy"] <= 100
     assert metrics["loss"] >= 0
     assert metrics["total"] > 0
-    print(f"✓ Model evaluation: accuracy={metrics['accuracy']:.2f}%, "
-          f"loss={metrics['loss']:.4f}, correct={metrics['correct']}/{metrics['total']}")
+    print(
+        f"✓ Model evaluation: accuracy={metrics['accuracy']:.2f}%, "
+        f"loss={metrics['loss']:.4f}, correct={metrics['correct']}/{metrics['total']}"
+    )
 
     print("=" * 60)
     print("✓ Test PASSED")
@@ -160,7 +164,7 @@ def test_validation_worker_validate_model():
     # Serialize and encrypt diff
     diff_str = serialize_diff(diff)
     diff_bytes = diff_str.encode("utf-8")
-    
+
     key = AES256GCM.generate_key()
     encryption_service = EncryptionService(key=key)
     encrypted_diff = encryption_service.encrypt_diff(diff_bytes)
@@ -173,7 +177,9 @@ def test_validation_worker_validate_model():
     mock_cid = "QmTest123456789"
 
     async def run_test():
-        with patch("main_service.workers.validation_worker.IPFSClient") as mock_ipfs_class:
+        with patch(
+            "main_service.workers.validation_worker.IPFSClient"
+        ) as mock_ipfs_class:
             mock_client = AsyncMock()
             mock_client.get_bytes = AsyncMock(return_value=encrypted_diff)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -190,7 +196,9 @@ def test_validation_worker_validate_model():
             assert "metrics" in validation_result
             assert validation_result["model_version_id"] == "version_1"
             assert "accuracy" in validation_result["metrics"]
-            print(f"✓ Validation complete: accuracy={validation_result['metrics']['accuracy']:.2f}%")
+            print(
+                f"✓ Validation complete: accuracy={validation_result['metrics']['accuracy']:.2f}%"
+            )
 
     asyncio.run(run_test())
     print("=" * 60)
@@ -206,7 +214,7 @@ def test_validation_worker_publish_decision_task():
     print()
 
     worker = ValidationWorker()
-    
+
     # Mock publisher
     mock_publisher = Mock()
     worker.publisher = mock_publisher
@@ -268,7 +276,7 @@ def test_validation_worker_handle_validate_task():
     # Serialize and encrypt diff
     diff_str = serialize_diff(diff)
     diff_bytes = diff_str.encode("utf-8")
-    
+
     key = AES256GCM.generate_key()
     encryption_service = EncryptionService(key=key)
     encrypted_diff = encryption_service.encrypt_diff(diff_bytes)
@@ -300,7 +308,9 @@ def test_validation_worker_handle_validate_task():
     # when there's already a running event loop. We'll test it directly with
     # the async method instead.
     async def run_test():
-        with patch("main_service.workers.validation_worker.IPFSClient") as mock_ipfs_class:
+        with patch(
+            "main_service.workers.validation_worker.IPFSClient"
+        ) as mock_ipfs_class:
             mock_client = AsyncMock()
             mock_client.get_bytes = AsyncMock(return_value=encrypted_diff)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -313,7 +323,7 @@ def test_validation_worker_handle_validate_task():
                 model_version_id="version_1",
                 parent_version_id=None,
             )
-            
+
             # Manually publish decision task to test the full flow
             worker._publish_decision_task(
                 validation_result=validation_result,
@@ -341,6 +351,7 @@ def test_validation_worker_handle_validate_task():
     print("=" * 60)
 
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning:unittest.mock")
 def test_validation_worker_error_handling():
     """Test error handling in validation worker."""
     print("\n" + "=" * 60)
@@ -370,11 +381,31 @@ def test_validation_worker_error_handling():
 
     # Mock IPFS client to raise error
     async def run_test():
-        with patch("main_service.workers.validation_worker.IPFSClient") as mock_ipfs_class:
-            mock_client = AsyncMock()
-            mock_client.get_bytes = AsyncMock(side_effect=Exception("IPFS error"))
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
+        # Define the async error raiser
+        async def raise_ipfs_error(*args, **kwargs):
+            raise Exception("IPFS error")
+
+        # Use MagicMock for the entire client to avoid AsyncMock's internal wrapper
+        mock_client = MagicMock()
+
+        # Use MagicMock for the method that raises the error
+        mock_client.get_bytes = MagicMock(side_effect=raise_ipfs_error)
+
+        # Configure context manager methods using async functions to avoid AsyncMock
+        async def aenter():
+            return mock_client
+
+        async def aexit(*args):
+            return None
+
+        mock_client.__aenter__ = MagicMock(side_effect=aenter)
+        mock_client.__aexit__ = MagicMock(side_effect=aexit)
+
+        # Force patch to use MagicMock instead of potentially creating AsyncMock
+        with patch(
+            "main_service.workers.validation_worker.IPFSClient", new_callable=MagicMock
+        ) as mock_ipfs_class:
+            # Set the return value to our mock client
             mock_ipfs_class.return_value = mock_client
 
             # Test that async method raises error
@@ -431,4 +462,3 @@ def run_all_tests():
 if __name__ == "__main__":
     success = run_all_tests()
     sys.exit(0 if success else 1)
-

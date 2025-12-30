@@ -20,7 +20,7 @@ class Trainer:
         model: Optional[SimpleCNN] = None,
         learning_rate: float = 0.001,
         batch_size: int = 64,
-        epochs: int = 1,
+        epochs: int = 100,
         device: Optional[torch.device] = None,
     ):
         """

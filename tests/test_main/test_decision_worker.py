@@ -337,8 +337,13 @@ def test_decision_worker_publish_train_tasks():
     worker = DecisionWorker()
     worker.num_clients = 3
 
-    # Mock publisher
-    mock_publisher = Mock()
+    # Mock publisher - explicitly set publish_task as synchronous
+    # Use side_effect with a regular function to ensure it's not treated as async
+    def sync_publish_task(*args, **kwargs):
+        return None
+
+    mock_publisher = Mock(spec=["publish_task"])
+    mock_publisher.publish_task = Mock(side_effect=sync_publish_task)
     worker.publisher = mock_publisher
 
     # Publish train tasks
@@ -371,8 +376,13 @@ def test_decision_worker_publish_rollback_task():
 
     worker = DecisionWorker()
 
-    # Mock publisher
-    mock_publisher = Mock()
+    # Mock publisher - explicitly set publish_task as synchronous
+    # Use side_effect with a regular function to ensure it's not treated as async
+    def sync_publish_task(*args, **kwargs):
+        return None
+
+    mock_publisher = Mock(spec=["publish_task"])
+    mock_publisher.publish_task = Mock(side_effect=sync_publish_task)
     worker.publisher = mock_publisher
 
     # Publish rollback task
@@ -409,8 +419,13 @@ def test_decision_worker_publish_training_complete_task():
     worker.state.current_iteration = 10
     worker.state.rollback_count = 2
 
-    # Mock publisher
-    mock_publisher = Mock()
+    # Mock publisher - explicitly set publish_task as synchronous
+    # Use side_effect with a regular function to ensure it's not treated as async
+    def sync_publish_task(*args, **kwargs):
+        return None
+
+    mock_publisher = Mock(spec=["publish_task"])
+    mock_publisher.publish_task = Mock(side_effect=sync_publish_task)
     worker.publisher = mock_publisher
 
     validation_result = {
@@ -452,8 +467,13 @@ def test_decision_worker_handle_decision_continue_training():
     worker = DecisionWorker()
     worker.num_clients = 2
 
-    # Mock publisher
-    mock_publisher = Mock()
+    # Mock publisher - explicitly set publish_task as synchronous
+    # Use side_effect with a regular function to ensure it's not treated as async
+    def sync_publish_task(*args, **kwargs):
+        return None
+
+    mock_publisher = Mock(spec=["publish_task"])
+    mock_publisher.publish_task = Mock(side_effect=sync_publish_task)
     worker.publisher = mock_publisher
 
     # Create DECISION task with good accuracy
@@ -514,8 +534,13 @@ def test_decision_worker_handle_decision_rollback():
     worker.state.best_checkpoint_cid = "QmTest111"
     worker.state.patience_counter = 3  # Patience exceeded
 
-    # Mock publisher
-    mock_publisher = Mock()
+    # Mock publisher - explicitly set publish_task as synchronous
+    # Use side_effect with a regular function to ensure it's not treated as async
+    def sync_publish_task(*args, **kwargs):
+        return None
+
+    mock_publisher = Mock(spec=["publish_task"])
+    mock_publisher.publish_task = Mock(side_effect=sync_publish_task)
     worker.publisher = mock_publisher
 
     # Create DECISION task with poor accuracy
@@ -580,8 +605,13 @@ def test_decision_worker_handle_decision_max_rollbacks():
     worker.state.best_checkpoint_version = "version_1"
     worker.state.best_checkpoint_cid = "QmTest111"
 
-    # Mock publisher
-    mock_publisher = Mock()
+    # Mock publisher - explicitly set publish_task as synchronous
+    # Use side_effect with a regular function to ensure it's not treated as async
+    def sync_publish_task(*args, **kwargs):
+        return None
+
+    mock_publisher = Mock(spec=["publish_task"])
+    mock_publisher.publish_task = Mock(side_effect=sync_publish_task)
     worker.publisher = mock_publisher
 
     # Create DECISION task that would trigger rollback
@@ -634,21 +664,57 @@ def run_all_tests():
     """Run all decision worker tests."""
     tests = [
         ("Initialization", test_decision_worker_initialization),
-        ("Evaluate Rollback (First Iteration)", test_decision_worker_evaluate_rollback_first_iteration),
-        ("Evaluate Rollback (New Best)", test_decision_worker_evaluate_rollback_new_best),
-        ("Evaluate Rollback (Within Tolerance)", test_decision_worker_evaluate_rollback_within_tolerance),
-        ("Evaluate Rollback (Severe Drop)", test_decision_worker_evaluate_rollback_severe_drop),
-        ("Evaluate Rollback (Patience Exceeded)", test_decision_worker_evaluate_rollback_patience_exceeded),
-        ("Check Completion (Accuracy Threshold)", test_decision_worker_check_completion_accuracy_threshold),
-        ("Check Completion (Max Iterations)", test_decision_worker_check_completion_max_iterations),
-        ("Check Completion (Max Rollbacks)", test_decision_worker_check_completion_max_rollbacks),
-        ("Check Completion (Convergence)", test_decision_worker_check_completion_convergence),
+        (
+            "Evaluate Rollback (First Iteration)",
+            test_decision_worker_evaluate_rollback_first_iteration,
+        ),
+        (
+            "Evaluate Rollback (New Best)",
+            test_decision_worker_evaluate_rollback_new_best,
+        ),
+        (
+            "Evaluate Rollback (Within Tolerance)",
+            test_decision_worker_evaluate_rollback_within_tolerance,
+        ),
+        (
+            "Evaluate Rollback (Severe Drop)",
+            test_decision_worker_evaluate_rollback_severe_drop,
+        ),
+        (
+            "Evaluate Rollback (Patience Exceeded)",
+            test_decision_worker_evaluate_rollback_patience_exceeded,
+        ),
+        (
+            "Check Completion (Accuracy Threshold)",
+            test_decision_worker_check_completion_accuracy_threshold,
+        ),
+        (
+            "Check Completion (Max Iterations)",
+            test_decision_worker_check_completion_max_iterations,
+        ),
+        (
+            "Check Completion (Max Rollbacks)",
+            test_decision_worker_check_completion_max_rollbacks,
+        ),
+        (
+            "Check Completion (Convergence)",
+            test_decision_worker_check_completion_convergence,
+        ),
         ("Publish Train Tasks", test_decision_worker_publish_train_tasks),
         ("Publish Rollback Task", test_decision_worker_publish_rollback_task),
-        ("Publish Training Complete Task", test_decision_worker_publish_training_complete_task),
-        ("Handle Decision (Continue Training)", test_decision_worker_handle_decision_continue_training),
+        (
+            "Publish Training Complete Task",
+            test_decision_worker_publish_training_complete_task,
+        ),
+        (
+            "Handle Decision (Continue Training)",
+            test_decision_worker_handle_decision_continue_training,
+        ),
         ("Handle Decision (Rollback)", test_decision_worker_handle_decision_rollback),
-        ("Handle Decision (Max Rollbacks)", test_decision_worker_handle_decision_max_rollbacks),
+        (
+            "Handle Decision (Max Rollbacks)",
+            test_decision_worker_handle_decision_max_rollbacks,
+        ),
     ]
 
     passed = 0
@@ -676,4 +742,3 @@ def run_all_tests():
 if __name__ == "__main__":
     success = run_all_tests()
     sys.exit(0 if success else 1)
-

@@ -19,6 +19,7 @@ from shared.models.task import Task, TaskType, TrainTaskPayload, TaskMetadata
 from client_service.worker import ClientWorker
 from client_service.config import config
 from client_service.training.model import SimpleCNN
+from client_service.training.trainer import Trainer
 
 
 def test_worker_train_task():
@@ -55,9 +56,10 @@ def test_worker_train_task():
         print("✓ Task published")
     print()
 
-    # Create worker and process task (non-blocking test)
+    # Create worker with trainer using 1 epoch for faster testing
     print("Creating client worker...")
-    worker = ClientWorker()
+    trainer = Trainer(epochs=1)  # Use 1 epoch for faster testing
+    worker = ClientWorker(trainer=trainer)
 
     # Process task directly (for testing, not using consume loop)
     print("Processing task...")

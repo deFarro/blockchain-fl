@@ -8,6 +8,7 @@ from shared.queue.publisher import QueuePublisher
 from shared.queue.connection import QueueConnection
 from shared.models.task import Task, TaskType, TaskMetadata, RollbackTaskPayload
 from main_service.blockchain.fabric_client import FabricClient
+from main_service.services.training_service import prepopulate_initial_weights
 from main_service.api.models import (
     ModelVersionResponse,
     ModelVersionListResponse,
@@ -185,8 +186,9 @@ async def manual_rollback(
             f"Manual rollback requested: version={version_id}, reason={request.reason}"
         )
 
-        # Verify version_id matches request
-        if version_id != request.target_version_id:
+        # Use version_id from path (request.target_version_id is optional for backward compatibility)
+        target_version_id = request.target_version_id or version_id
+        if request.target_version_id and version_id != target_version_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Version ID in path must match target_version_id in request",
@@ -194,7 +196,7 @@ async def manual_rollback(
 
         # Get IPFS CID for the target version from blockchain
         async with FabricClient() as blockchain_client:
-            provenance = await blockchain_client.get_model_provenance(version_id)
+            provenance = await blockchain_client.get_model_provenance(target_version_id)
 
         ipfs_cid = provenance.get("metadata", {}).get("ipfs_cid")
         if not ipfs_cid:
@@ -208,25 +210,25 @@ async def manual_rollback(
         publisher = QueuePublisher(connection=connection)
 
         rollback_task = Task(
-            task_id=f"manual-rollback-{version_id}-{int(time.time())}",
+            task_id=f"manual-rollback-{target_version_id}-{int(time.time())}",
             task_type=TaskType.ROLLBACK,
             payload=RollbackTaskPayload(
-                target_version_id=version_id,
+                target_version_id=target_version_id,
                 target_weights_cid=ipfs_cid,
                 reason=f"Manual rollback: {request.reason}",
                 cutoff_version_id=None,  # Manual rollback doesn't specify cutoff
             ).model_dump(),
             metadata=TaskMetadata(source="api_manual_rollback"),
-            model_version_id=version_id,
+            model_version_id=target_version_id,
             parent_version_id=provenance.get("parent_version_id"),
         )
 
         publisher.publish_task(rollback_task, "rollback_queue")
-        logger.info(f"Published manual rollback task for version {version_id}")
+        logger.info(f"Published manual rollback task for version {target_version_id}")
 
         return ManualRollbackResponse(
             success=True,
-            message=f"Rollback task published for version {version_id}",
+            message=f"Rollback task published for version {target_version_id}",
             transaction_id=None,  # Will be set by rollback worker
         )
     except HTTPException:
@@ -257,27 +259,32 @@ async def start_training(
     try:
         logger.info("Training start requested via API")
 
-        # TODO: Get current training state from decision worker
-        # For now, publish TRAIN tasks to start training
-
         connection = QueueConnection()
         publisher = QueuePublisher(connection=connection)
 
-        # Publish initial TRAIN tasks for all clients
-        # TODO: Get client IDs from settings or discovery
+        # Get number of clients from settings (default to 2 if not set)
         from shared.config import settings
 
-        # Get number of clients from settings (default to 2 if not set)
         num_clients = getattr(settings, "num_clients", 2)
 
         iteration = 1  # Start from iteration 1
 
+        # Prepopulate initial weights if not provided
+        initial_weights_cid = request.initial_weights_cid
+        if initial_weights_cid is None:
+            logger.info(
+                "No initial weights provided, generating random initial weights..."
+            )
+            initial_weights_cid = await prepopulate_initial_weights()
+            logger.info(f"Generated initial weights with CID: {initial_weights_cid}")
+
+        # Publish initial TRAIN tasks for all clients
         for client_id in range(num_clients):
             train_task = Task(
                 task_id=f"api-train-{iteration}-client_{client_id}-{int(time.time())}",
                 task_type=TaskType.TRAIN,
                 payload={
-                    "weights_cid": request.initial_weights_cid,
+                    "weights_cid": initial_weights_cid,
                     "iteration": iteration,
                     "client_id": f"client_{client_id}",
                 },
@@ -376,6 +383,9 @@ async def get_training_status(
                 rollback_count=0,
                 status="stopped",
                 start_time=None,
+                best_checkpoint_version=None,
+                best_checkpoint_cid=None,
+                accuracy_history=None,
             )
 
         # Query blockchain for latest version
@@ -392,10 +402,17 @@ async def get_training_status(
 
         # Find best accuracy from validation_history or current validation_metrics
         best_accuracy = None
+        accuracy_history_list = []
         if validation_history:
-            best_accuracy = max(v.get("accuracy", 0.0) for v in validation_history)
+            accuracy_history_list = [v.get("accuracy", 0.0) for v in validation_history]
+            best_accuracy = (
+                max(accuracy_history_list) if accuracy_history_list else None
+            )
         elif validation_metrics:
-            best_accuracy = validation_metrics.get("accuracy")
+            current_acc = validation_metrics.get("accuracy")
+            if current_acc is not None:
+                accuracy_history_list = [current_acc]
+                best_accuracy = current_acc
 
         # Get timestamp for start_time (from first version in chain)
         # For now, use current version's timestamp
@@ -419,6 +436,10 @@ async def get_training_status(
         # is_training: assume True if we have a version with pending/passed validation
         is_training = validation_status in ["pending", "passed"]
 
+        # Get best checkpoint info from metadata
+        best_checkpoint_version = metadata.get("best_checkpoint_version")
+        best_checkpoint_cid = metadata.get("best_checkpoint_cid")
+
         return TrainingStatusResponse(
             is_training=is_training,
             current_iteration=current_iteration,
@@ -427,6 +448,9 @@ async def get_training_status(
             rollback_count=rollback_count,
             status=training_status,
             start_time=start_time,
+            best_checkpoint_version=best_checkpoint_version,
+            best_checkpoint_cid=best_checkpoint_cid,
+            accuracy_history=accuracy_history_list if accuracy_history_list else None,
         )
     except Exception as e:
         logger.error(f"Error getting training status: {str(e)}", exc_info=True)

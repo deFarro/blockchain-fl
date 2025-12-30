@@ -18,6 +18,7 @@ from shared.models.task import (
 from main_service.blockchain.fabric_client import FabricClient
 from shared.utils.hashing import compute_hash
 from shared.logger import setup_logger
+from shared.monitoring.metrics import get_metrics_collector
 
 logger = setup_logger(__name__)
 
@@ -98,28 +99,53 @@ class BlockchainWorker:
         Returns:
             Transaction ID from blockchain service
         """
+        start_time = time.time()
         logger.info(
             f"Registering model version {model_version_id} on blockchain "
             f"(parent: {parent_version_id})"
         )
 
-        async with FabricClient() as blockchain_client:
-            transaction_id = await blockchain_client.register_model_update(
-                model_version_id=model_version_id,
-                parent_version_id=parent_version_id,
-                hash_value=blockchain_hash,
-                metadata=metadata,
+        try:
+            async with FabricClient() as blockchain_client:
+                transaction_id = await blockchain_client.register_model_update(
+                    model_version_id=model_version_id,
+                    parent_version_id=parent_version_id,
+                    hash_value=blockchain_hash,
+                    metadata=metadata,
+                )
+
+            # Type assertion: register_model_update returns str (validated in fabric_client)
+            if not isinstance(transaction_id, str):
+                raise ValueError(f"Expected str, got {type(transaction_id)}")
+
+            duration = time.time() - start_time
+            get_metrics_collector().record_timing(
+                "blockchain_register",
+                duration,
+                metadata={
+                    "model_version_id": model_version_id,
+                    "iteration": metadata.get("iteration"),
+                    "transaction_id": transaction_id,
+                },
             )
 
-        # Type assertion: register_model_update returns str (validated in fabric_client)
-        if not isinstance(transaction_id, str):
-            raise ValueError(f"Expected str, got {type(transaction_id)}")
-
-        logger.info(
-            f"✓ Model version {model_version_id} registered on blockchain: "
-            f"tx_id={transaction_id}"
-        )
-        return transaction_id
+            logger.info(
+                f"✓ Model version {model_version_id} registered on blockchain: "
+                f"tx_id={transaction_id} (duration: {duration:.3f}s)"
+            )
+            return transaction_id
+        except Exception as e:
+            duration = time.time() - start_time
+            get_metrics_collector().record_timing(
+                "blockchain_register",
+                duration,
+                metadata={
+                    "model_version_id": model_version_id,
+                    "status": "error",
+                    "error": str(e),
+                },
+            )
+            raise
 
     async def _process_blockchain_write(
         self,

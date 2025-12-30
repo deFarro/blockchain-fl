@@ -78,9 +78,10 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ENVIRONMENT=${ENVIRONMENT:-development}
     volumes:
-      - ./data:/app/data:ro  # Read-only access to data directory
-      - ./shared:/app/shared  # Mount shared code
-      - ./main_service:/app/main_service  # Mount main service code
+      - ./shared:/app/shared  # Mount shared code for development
+      - ./main_service:/app/main_service  # Mount main service code for development
+      # Note: Dashboard is built into the image, not mounted
+      # Note: Data directory not mounted - PyTorch will download MNIST inside container if needed
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -106,12 +107,13 @@ services:
       - NUM_CLIENTS=${NUM_CLIENTS:-2}  # Total number of client replicas
       - SPLIT_TYPE=${SPLIT_TYPE:-iid}  # iid or non_iid
       - DATASET_SEED=${DATASET_SEED:-42}  # Seed for dataset splitting
+      - EPOCHS=${EPOCHS:-100}  # Number of training epochs per iteration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ENVIRONMENT=${ENVIRONMENT:-development}
     volumes:
-      - ./data:/app/data  # For MNIST dataset download
-      - ./shared:/app/shared  # Mount shared code
-      - ./client_service:/app/client_service  # Mount client service code
+      - ./shared:/app/shared  # Mount shared code for development
+      - ./client_service:/app/client_service  # Mount client service code for development
+      # Note: Data directory not mounted - PyTorch will download MNIST inside container if needed
     depends_on:
       rabbitmq:
         condition: service_healthy

@@ -56,7 +56,10 @@ class ProvenanceChainResponse(BaseModel):
 class ManualRollbackRequest(BaseModel):
     """Request model for manual rollback."""
 
-    target_version_id: str = Field(..., description="Version ID to rollback to")
+    target_version_id: Optional[str] = Field(
+        None,
+        description="Version ID to rollback to (optional, uses path param if not provided)",
+    )
     reason: str = Field(..., description="Reason for rollback")
 
 
@@ -101,6 +104,15 @@ class TrainingStatusResponse(BaseModel):
         ..., description="Training status (running, stopped, completed)"
     )
     start_time: Optional[datetime] = Field(None, description="Training start time")
+    best_checkpoint_version: Optional[str] = Field(
+        None, description="Version ID of best checkpoint"
+    )
+    best_checkpoint_cid: Optional[str] = Field(
+        None, description="IPFS CID of best checkpoint"
+    )
+    accuracy_history: Optional[List[float]] = Field(
+        None, description="History of accuracy values per iteration"
+    )
 
 
 class ErrorResponse(BaseModel):

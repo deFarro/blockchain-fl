@@ -10,12 +10,13 @@ help:
 	@echo ""
 	@echo "Testing commands (local):"
 	@echo "  make test            - Run all tests (shared, main, client, blockchain)"
-	@echo "  make test-all        - Run all tests including queue integration"
+	@echo "  make test-all        - Run all tests including integration tests"
 	@echo "  make test-shared     - Run tests for shared utilities"
 	@echo "  make test-main       - Run tests for main service"
 	@echo "  make test-client     - Run tests for client service"
 	@echo "  make test-blockchain - Run tests for blockchain service (Go)"
 	@echo "  make test-queue      - Run queue integration test"
+	@echo "  make test-integration - Run end-to-end integration tests"
 	@echo "  make test-docker     - Run tests in Docker containers"
 
 build:
@@ -39,8 +40,12 @@ clean:
 test: test-shared test-main test-client test-blockchain
 	@echo "✓ All tests passed"
 
-test-all: test test-queue test-blockchain
+test-all: test test-queue test-integration test-blockchain
 	@echo "✓ All tests including integration tests passed"
+
+test-integration:
+	@echo "Running integration tests..."
+	@pytest tests/test_integration/ -v -m integration || (echo "✗ Integration tests failed" && exit 1)
 
 test-shared:
 	@echo "Running shared utilities tests (including queue)..."

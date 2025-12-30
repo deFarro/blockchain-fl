@@ -13,6 +13,7 @@ from shared.queue.publisher import QueuePublisher
 from shared.queue.connection import QueueConnection
 from shared.models.task import Task, TaskType, AggregateTaskPayload
 from shared.logger import setup_logger
+from shared.monitoring.metrics import get_metrics_collector
 from client_service.training.model import SimpleCNN
 
 logger = setup_logger(__name__)
@@ -76,6 +77,7 @@ class AggregationWorker:
         Returns:
             Aggregated weight diff as dictionary
         """
+        agg_start = time.time()
         if not client_updates:
             raise ValueError("Cannot aggregate empty client updates list")
 
@@ -135,9 +137,21 @@ class AggregationWorker:
             for weight_diff, weight in zip(weight_diffs, weights):
                 aggregated[name] += weight_diff[name] * weight
 
+        agg_duration = time.time() - agg_start
+        get_metrics_collector().record_timing(
+            "fedavg_aggregation",
+            agg_duration,
+            metadata={
+                "num_clients": len(client_updates),
+                "total_samples": total_samples,
+                "excluded_clients": len(exclude_clients) if exclude_clients else 0,
+            },
+        )
+
         logger.info(
             f"Aggregated {len(client_updates)} client updates "
-            f"(total samples: {total_samples}, weights: {[f'{w:.3f}' for w in weights]})"
+            f"(total samples: {total_samples}, weights: {[f'{w:.3f}' for w in weights]}, "
+            f"duration: {agg_duration:.3f}s)"
         )
 
         return aggregated

@@ -29,7 +29,7 @@ class ClientWorker:
             trainer: Trainer instance (creates new one if None)
             connection: QueueConnection instance (creates new one if None)
         """
-        self.trainer = trainer or Trainer()
+        self.trainer = trainer or Trainer(epochs=config.epochs)
         self.connection = connection or QueueConnection()
         self.consumer = QueueConsumer(connection=self.connection)
         self.publisher = QueuePublisher(connection=self.connection)

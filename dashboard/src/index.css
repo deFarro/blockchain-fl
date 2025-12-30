@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-sans bg-gradient-to-br from-indigo-500 to-purple-600 min-h-screen p-5;
+  }
+
+  #root {
+    @apply max-w-7xl mx-auto;
+  }
+}
+

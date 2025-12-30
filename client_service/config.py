@@ -30,6 +30,9 @@ class ClientConfig(BaseSettings):
     # Dataset Configuration
     data_dir: str = "data/mnist"
     
+    # Training Configuration
+    epochs: int = int(os.getenv("EPOCHS", "100"))  # Number of epochs per training iteration
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

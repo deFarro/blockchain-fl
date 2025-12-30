@@ -2,6 +2,15 @@
 
 > **MSc Thesis Project** > **Topic:** Blockchain-Enabled Learning Systems for Verifiable Model Provenance, Rollback, and Regulatory Auditability.
 
+## Quick Start
+
+1. **Setup:** `cp env_template.txt .env` and set `ENCRYPTION_KEY` and `API_KEY`
+2. **Start:** `docker-compose up -d`
+3. **Access Dashboard:** Open `http://localhost:8000/`
+4. **Start Training:** Click "Start Training" in the dashboard
+
+For detailed instructions, see [SETUP.md](SETUP.md) and [RUNNING.md](RUNNING.md).
+
 ## Project Overview
 
 This repository contains the prototype implementation for a Master's thesis investigating the convergence of **Distributed Ledger Technology (DLT)** and **Federated Learning (FL)**.

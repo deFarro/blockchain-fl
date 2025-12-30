@@ -432,5 +432,70 @@ pytest tests/test_main/test_storage.py -v
 
 1. Verify all services are running: `docker-compose ps`
 2. Check service logs: `docker-compose logs -f [service-name]`
-3. Test API endpoints (see main README.md for API documentation)
+3. Test API endpoints (see RUNNING.md for API documentation)
 4. Start implementing workers and training logic
+
+---
+
+# Dashboard
+
+The dashboard is a React application with Tailwind CSS for monitoring and controlling the federated learning system.
+
+## Development
+
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+The dev server runs on `http://localhost:3000` with proxy to API at `http://localhost:8000`.
+
+**Note:** This project uses **Tailwind CSS** for styling. The build process automatically processes Tailwind classes.
+
+## Building for Production
+
+```bash
+npm run build
+```
+
+This creates a `dist/` directory with the production build. The main service serves this directory.
+
+## Project Structure
+
+```
+dashboard/
+├── src/
+│   ├── components/     # React components
+│   │   ├── Header.jsx
+│   │   ├── Controls.jsx
+│   │   ├── StatusCard.jsx
+│   │   ├── AccuracyChart.jsx
+│   │   ├── VersionsTable.jsx
+│   │   ├── RollbackModal.jsx
+│   │   ├── ModelDetailsModal.jsx
+│   │   └── ProvenanceModal.jsx
+│   ├── utils/
+│   │   └── api.js      # API utility functions
+│   ├── App.jsx         # Main app component
+│   ├── main.jsx        # Entry point
+│   └── index.css       # Global styles (Tailwind directives)
+├── index.html          # HTML template
+├── package.json        # Dependencies (includes Tailwind CSS)
+├── vite.config.js      # Vite configuration
+├── tailwind.config.js  # Tailwind CSS configuration
+├── postcss.config.js   # PostCSS configuration (for Tailwind)
+└── dist/               # Production build (generated)
+```
+
+**Styling:** This project uses **Tailwind CSS** for all styling. All components use Tailwind utility classes instead of custom CSS.
+
+## Features
+
+- Real-time training status monitoring
+- Start/Stop training controls
+- Model version listing and details
+- Rollback functionality
+- Provenance chain viewing
+- Accuracy history chart
+- API documentation link

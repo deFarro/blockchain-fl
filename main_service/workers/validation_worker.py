@@ -23,6 +23,7 @@ from shared.datasets import get_dataset, DatasetInterface
 from client_service.training.model import SimpleCNN
 from shared.config import settings
 from shared.logger import setup_logger
+from shared.monitoring.metrics import get_metrics_collector
 
 logger = setup_logger(__name__)
 
@@ -201,8 +202,20 @@ class ValidationWorker:
         test_loader = self._load_test_dataset()
 
         # Evaluate model
+        eval_start = time.time()
         logger.info("Evaluating model on test dataset...")
         metrics = self._evaluate_model(test_loader)
+        eval_duration = time.time() - eval_start
+
+        get_metrics_collector().record_timing(
+            "model_validation",
+            eval_duration,
+            metadata={
+                "model_version_id": model_version_id,
+                "accuracy": metrics.get("accuracy", 0.0),
+                "loss": metrics.get("loss", 0.0),
+            },
+        )
 
         validation_result = {
             "model_version_id": model_version_id,
@@ -211,7 +224,11 @@ class ValidationWorker:
             "metrics": metrics,
         }
 
-        logger.info(f"✓ Validation complete for version {model_version_id}")
+        logger.info(
+            f"✓ Validation complete for version {model_version_id}: "
+            f"accuracy={metrics.get('accuracy', 0.0):.2f}% "
+            f"(duration: {eval_duration:.3f}s)"
+        )
         return validation_result
 
     def _publish_decision_task(

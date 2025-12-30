@@ -18,6 +18,7 @@ from shared.storage.encryption import EncryptionService
 from main_service.storage.ipfs_client import IPFSClient
 from shared.utils.hashing import compute_hash, verify_hash
 from shared.logger import setup_logger
+from shared.monitoring.metrics import get_metrics_collector
 
 logger = setup_logger(__name__)
 
@@ -76,9 +77,7 @@ class StorageWorker:
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        logger.info(
-            "✓ Hash verification passed - diff content matches blockchain hash"
-        )
+        logger.info("✓ Hash verification passed - diff content matches blockchain hash")
 
         # Encrypt the diff
         logger.info(f"Encrypting aggregated diff for version {model_version_id}")
@@ -88,10 +87,26 @@ class StorageWorker:
         )
 
         # Upload to IPFS
+        upload_start = time.time()
         logger.info(f"Uploading encrypted diff to IPFS for version {model_version_id}")
         async with IPFSClient() as ipfs_client:
             cid = await ipfs_client.add_bytes(encrypted_diff, pin=True)
-            logger.info(f"✓ Uploaded to IPFS: CID={cid}")
+            upload_duration = time.time() - upload_start
+
+            get_metrics_collector().record_timing(
+                "ipfs_upload",
+                upload_duration,
+                metadata={
+                    "model_version_id": model_version_id,
+                    "size_bytes": len(encrypted_diff),
+                    "cid": str(cid),
+                },
+            )
+
+            logger.info(
+                f"✓ Uploaded to IPFS: CID={cid} (duration: {upload_duration:.3f}s, "
+                f"size: {len(encrypted_diff)} bytes)"
+            )
 
             # Verify pinning
             pin_info = await ipfs_client.pin_ls(cid)

@@ -14,7 +14,8 @@ if "RABBITMQ_HOST" not in os.environ:
 
 import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock, patch
+import warnings
+from unittest.mock import Mock, AsyncMock, MagicMock, patch
 from main_service.workers.rollback_worker import RollbackWorker
 from shared.models.task import Task, TaskType, TaskMetadata, RollbackTaskPayload
 
@@ -53,7 +54,9 @@ def test_rollback_worker_verify_rollback_target():
     mock_cid = "QmTest123456789"
 
     async def run_test():
-        with patch("main_service.workers.rollback_worker.IPFSClient") as mock_ipfs_class:
+        with patch(
+            "main_service.workers.rollback_worker.IPFSClient"
+        ) as mock_ipfs_class:
             mock_client = AsyncMock()
             mock_client.get_bytes = AsyncMock(return_value=mock_weights_data)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -87,7 +90,9 @@ def test_rollback_worker_verify_rollback_target_not_found():
     mock_cid = "QmInvalid123456789"
 
     async def run_test():
-        with patch("main_service.workers.rollback_worker.IPFSClient") as mock_ipfs_class:
+        with patch(
+            "main_service.workers.rollback_worker.IPFSClient"
+        ) as mock_ipfs_class:
             mock_client = AsyncMock()
             mock_client.get_bytes = AsyncMock(return_value=None)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -105,6 +110,7 @@ def test_rollback_worker_verify_rollback_target_not_found():
     print("=" * 60)
 
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning:unittest.mock")
 def test_rollback_worker_verify_rollback_target_error():
     """Test verifying rollback target when IPFS error occurs."""
     print("\n" + "=" * 60)
@@ -118,11 +124,31 @@ def test_rollback_worker_verify_rollback_target_error():
     mock_cid = "QmError123456789"
 
     async def run_test():
-        with patch("main_service.workers.rollback_worker.IPFSClient") as mock_ipfs_class:
-            mock_client = AsyncMock()
-            mock_client.get_bytes = AsyncMock(side_effect=Exception("IPFS error"))
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
+        # Define the async error raiser
+        async def raise_ipfs_error(*args, **kwargs):
+            raise Exception("IPFS error")
+
+        # Use MagicMock for the entire client to avoid AsyncMock's internal wrapper
+        mock_client = MagicMock()
+
+        # Use MagicMock for the method that raises the error
+        mock_client.get_bytes = MagicMock(side_effect=raise_ipfs_error)
+
+        # Configure context manager methods using async functions to avoid AsyncMock
+        async def aenter():
+            return mock_client
+
+        async def aexit(*args):
+            return None
+
+        mock_client.__aenter__ = MagicMock(side_effect=aenter)
+        mock_client.__aexit__ = MagicMock(side_effect=aexit)
+
+        # Force patch to use MagicMock instead of potentially creating AsyncMock
+        with patch(
+            "main_service.workers.rollback_worker.IPFSClient", new_callable=MagicMock
+        ) as mock_ipfs_class:
+            # Set the return value to our mock client
             mock_ipfs_class.return_value = mock_client
 
             is_accessible = await worker._verify_rollback_target(mock_cid)
@@ -150,7 +176,9 @@ def test_rollback_worker_record_rollback_on_blockchain():
     reason = "Test rollback"
 
     async def run_test():
-        with patch("main_service.workers.rollback_worker.FabricClient") as mock_fabric_class:
+        with patch(
+            "main_service.workers.rollback_worker.FabricClient"
+        ) as mock_fabric_class:
             mock_client = AsyncMock()
             mock_client.rollback_model = AsyncMock(return_value=mock_tx_id)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -175,6 +203,7 @@ def test_rollback_worker_record_rollback_on_blockchain():
     print("=" * 60)
 
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning:unittest.mock")
 def test_rollback_worker_record_rollback_blockchain_error():
     """Test recording rollback when blockchain service fails."""
     print("\n" + "=" * 60)
@@ -188,11 +217,30 @@ def test_rollback_worker_record_rollback_blockchain_error():
     reason = "Test rollback"
 
     async def run_test():
-        with patch("main_service.workers.rollback_worker.FabricClient") as mock_fabric_class:
-            mock_client = AsyncMock()
-            mock_client.rollback_model = AsyncMock(side_effect=Exception("Blockchain error"))
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
+        async def raise_blockchain_error(*args, **kwargs):
+            raise Exception("Blockchain error")
+
+        # Use MagicMock for the entire client to avoid AsyncMock's internal wrapper
+        mock_client = MagicMock()
+
+        # Use MagicMock for the method that raises the error
+        mock_client.rollback_model = MagicMock(side_effect=raise_blockchain_error)
+
+        # Configure context manager methods using async functions to avoid AsyncMock
+        async def aenter():
+            return mock_client
+
+        async def aexit(*args):
+            return None
+
+        mock_client.__aenter__ = MagicMock(side_effect=aenter)
+        mock_client.__aexit__ = MagicMock(side_effect=aexit)
+
+        # Force patch to use MagicMock instead of potentially creating AsyncMock
+        with patch(
+            "main_service.workers.rollback_worker.FabricClient", new_callable=MagicMock
+        ) as mock_fabric_class:
+            # Set the return value to our mock client
             mock_fabric_class.return_value = mock_client
 
             transaction_id = await worker._record_rollback_on_blockchain(
@@ -226,7 +274,9 @@ def test_rollback_worker_process_rollback():
     mock_tx_id = "tx_rollback_12345"
 
     async def run_test():
-        with patch("main_service.workers.rollback_worker.IPFSClient") as mock_ipfs_class, patch(
+        with patch(
+            "main_service.workers.rollback_worker.IPFSClient"
+        ) as mock_ipfs_class, patch(
             "main_service.workers.rollback_worker.FabricClient"
         ) as mock_fabric_class:
             # Mock IPFS client
@@ -239,7 +289,9 @@ def test_rollback_worker_process_rollback():
             # Mock blockchain client
             mock_blockchain_client = AsyncMock()
             mock_blockchain_client.rollback_model = AsyncMock(return_value=mock_tx_id)
-            mock_blockchain_client.__aenter__ = AsyncMock(return_value=mock_blockchain_client)
+            mock_blockchain_client.__aenter__ = AsyncMock(
+                return_value=mock_blockchain_client
+            )
             mock_blockchain_client.__aexit__ = AsyncMock(return_value=None)
             mock_fabric_class.return_value = mock_blockchain_client
 
@@ -279,7 +331,9 @@ def test_rollback_worker_process_rollback_ipfs_failure():
     cutoff_version_id = None
 
     async def run_test():
-        with patch("main_service.workers.rollback_worker.IPFSClient") as mock_ipfs_class:
+        with patch(
+            "main_service.workers.rollback_worker.IPFSClient"
+        ) as mock_ipfs_class:
             # Mock IPFS client to return None (not found)
             mock_ipfs_client = AsyncMock()
             mock_ipfs_client.get_bytes = AsyncMock(return_value=None)
@@ -317,7 +371,9 @@ def test_rollback_worker_process_rollback_blockchain_failure():
     mock_weights_data = b"test_weights_data"
 
     async def run_test():
-        with patch("main_service.workers.rollback_worker.IPFSClient") as mock_ipfs_class, patch(
+        with patch(
+            "main_service.workers.rollback_worker.IPFSClient"
+        ) as mock_ipfs_class, patch(
             "main_service.workers.rollback_worker.FabricClient"
         ) as mock_fabric_class:
             # Mock IPFS client (success)
@@ -330,7 +386,9 @@ def test_rollback_worker_process_rollback_blockchain_failure():
             # Mock blockchain client (failure)
             mock_blockchain_client = AsyncMock()
             mock_blockchain_client.rollback_model = AsyncMock(return_value=None)
-            mock_blockchain_client.__aenter__ = AsyncMock(return_value=mock_blockchain_client)
+            mock_blockchain_client.__aenter__ = AsyncMock(
+                return_value=mock_blockchain_client
+            )
             mock_blockchain_client.__aexit__ = AsyncMock(return_value=None)
             mock_fabric_class.return_value = mock_blockchain_client
 
@@ -379,7 +437,9 @@ def test_rollback_worker_handle_rollback_task():
     # when there's already a running event loop. We'll test it directly with
     # the async method instead.
     async def run_test():
-        with patch("main_service.workers.rollback_worker.IPFSClient") as mock_ipfs_class, patch(
+        with patch(
+            "main_service.workers.rollback_worker.IPFSClient"
+        ) as mock_ipfs_class, patch(
             "main_service.workers.rollback_worker.FabricClient"
         ) as mock_fabric_class:
             # Mock IPFS client
@@ -392,7 +452,9 @@ def test_rollback_worker_handle_rollback_task():
             # Mock blockchain client
             mock_blockchain_client = AsyncMock()
             mock_blockchain_client.rollback_model = AsyncMock(return_value=mock_tx_id)
-            mock_blockchain_client.__aenter__ = AsyncMock(return_value=mock_blockchain_client)
+            mock_blockchain_client.__aenter__ = AsyncMock(
+                return_value=mock_blockchain_client
+            )
             mock_blockchain_client.__aexit__ = AsyncMock(return_value=None)
             mock_fabric_class.return_value = mock_blockchain_client
 
@@ -448,13 +510,31 @@ def run_all_tests():
     tests = [
         ("Initialization", test_rollback_worker_initialization),
         ("Verify Rollback Target", test_rollback_worker_verify_rollback_target),
-        ("Verify Rollback Target (Not Found)", test_rollback_worker_verify_rollback_target_not_found),
-        ("Verify Rollback Target (Error)", test_rollback_worker_verify_rollback_target_error),
-        ("Record Rollback on Blockchain", test_rollback_worker_record_rollback_on_blockchain),
-        ("Record Rollback (Blockchain Error)", test_rollback_worker_record_rollback_blockchain_error),
+        (
+            "Verify Rollback Target (Not Found)",
+            test_rollback_worker_verify_rollback_target_not_found,
+        ),
+        (
+            "Verify Rollback Target (Error)",
+            test_rollback_worker_verify_rollback_target_error,
+        ),
+        (
+            "Record Rollback on Blockchain",
+            test_rollback_worker_record_rollback_on_blockchain,
+        ),
+        (
+            "Record Rollback (Blockchain Error)",
+            test_rollback_worker_record_rollback_blockchain_error,
+        ),
         ("Process Rollback", test_rollback_worker_process_rollback),
-        ("Process Rollback (IPFS Failure)", test_rollback_worker_process_rollback_ipfs_failure),
-        ("Process Rollback (Blockchain Failure)", test_rollback_worker_process_rollback_blockchain_failure),
+        (
+            "Process Rollback (IPFS Failure)",
+            test_rollback_worker_process_rollback_ipfs_failure,
+        ),
+        (
+            "Process Rollback (Blockchain Failure)",
+            test_rollback_worker_process_rollback_blockchain_failure,
+        ),
         ("Handle Rollback Task", test_rollback_worker_handle_rollback_task),
         ("Error Handling", test_rollback_worker_handle_rollback_task_error),
     ]
@@ -484,4 +564,3 @@ def run_all_tests():
 if __name__ == "__main__":
     success = run_all_tests()
     sys.exit(0 if success else 1)
-
