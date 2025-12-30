@@ -229,6 +229,21 @@ All sensitive configuration is in `.env` file:
 - Service ports
 - Client IDs and dataset paths
 
+## Running Tests
+
+### Prerequisites for Tests
+
+Before running tests, ensure the required infrastructure services are running:
+
+```bash
+# Start RabbitMQ and IPFS (required for some tests)
+docker-compose up -d rabbitmq ipfs
+```
+
+# Run all tests
+
+make test
+
 ## Testing Queue Infrastructure
 
 After setting up the environment, you can test the queue infrastructure:
@@ -271,6 +286,23 @@ The test script will:
 - Consume the message
 - Verify successful delivery
 
+### 3. Testing IPFS Integration
+
+To run IPFS-related tests (in `test_storage.py`), ensure IPFS is running:
+
+```bash
+# Start IPFS container
+docker-compose up -d ipfs
+
+# Verify IPFS is accessible
+curl http://localhost:5001/api/v0/version
+
+# Run storage tests (IPFS tests will run if IPFS is available)
+pytest tests/test_main/test_storage.py -v
+```
+
+**Note:** If IPFS is not running, IPFS-related tests will be automatically skipped with a message `(IPFS not available)`. This is expected behavior and does not indicate a problem.
+
 ## Troubleshooting
 
 ### Blockchain Service Issues
@@ -284,6 +316,7 @@ The test script will:
 - **Import errors**: Make sure virtual environment is activated and dependencies are installed
 - **Port conflicts**: Check if ports 8000 (main-service) are already in use
 - **IPFS connection errors**: Ensure IPFS container is running (`docker-compose ps`)
+- **IPFS tests skipped**: This is normal if IPFS is not running. Start IPFS with `docker-compose up -d ipfs` to run IPFS-related tests
 
 ### Queue Issues
 
