@@ -136,6 +136,7 @@ If you want to develop the blockchain service locally in Go:
 cd blockchain_service
 
 # Install Go dependencies
+go mod tidy
 go mod download
 
 # Run locally
@@ -149,6 +150,100 @@ go build -o blockchain-service
 The service will run on `http://localhost:8080` by default.
 
 **Note:** For local development, you still need Docker for RabbitMQ and IPFS, but you can run the blockchain service locally instead of in Docker.
+
+#### Blockchain Service Overview
+
+The blockchain service is a Go microservice that handles all Hyperledger Fabric operations. It provides a REST API for blockchain operations and can operate in two modes:
+
+1. **Development Mode (Default)**: Uses in-memory storage - **No blockchain setup required!** This is the default mode and works out of the box. Perfect for development, testing, and research projects.
+
+2. **Blockchain Mode (Optional)**: Connected to a **local** Hyperledger Fabric network that you run on your own machine. This is completely local - you don't register with any external network. The Fabric network runs in Docker containers on your local machine, just like RabbitMQ and IPFS.
+
+**Important:** For most use cases (development, testing, research), you can use the default development mode. The blockchain service will automatically use in-memory storage and work perfectly fine without any blockchain setup.
+
+#### API Endpoints
+
+- `GET /health` - Health check
+- `POST /api/v1/model/register` - Register model version
+- `POST /api/v1/model/validate` - Record validation results
+- `POST /api/v1/model/rollback` - Record rollback event
+- `GET /api/v1/model/provenance/{version_id}` - Get provenance chain
+
+#### Blockchain Service Configuration
+
+**Environment Variables:**
+
+- `BLOCKCHAIN_SERVICE_PORT` - Port to run the service on (default: 8080)
+- `FABRIC_NETWORK_PROFILE` - Path to Fabric network connection profile (e.g., `connection.json`)
+- `FABRIC_WALLET_PATH` - Path to Fabric wallet directory
+- `FABRIC_CHANNEL_NAME` - Channel name (default: `mychannel`)
+- `FABRIC_CHAINCODE_NAME` - Chaincode name (default: `model_provenance`)
+- `FABRIC_USER` - User identity to use (default: `appUser`)
+
+#### Setting Up Local Hyperledger Fabric Network (Optional)
+
+**Important:** This is completely optional! The project works perfectly fine in development mode without any blockchain setup.
+
+If you want to use a **real local blockchain** (running entirely on your machine, not connected to any external network), you can set up the Hyperledger Fabric Test Network:
+
+**Fabric Test Network (Local Blockchain - Runs on Your Machine)**
+
+The Fabric Test Network is a **local blockchain network** that runs in Docker containers on your machine. It's completely isolated and doesn't connect to any external network.
+
+1. Clone Hyperledger Fabric samples:
+
+   ```bash
+   git clone https://github.com/hyperledger/fabric-samples.git
+   cd fabric-samples
+   ```
+
+2. Start the local test network (runs in Docker containers):
+
+   ```bash
+   ./network.sh up createChannel
+   ```
+
+3. Deploy the chaincode:
+
+   ```bash
+   ./network.sh deployCC -ccn model_provenance -ccp ../blockchain-fl/blockchain_service/chaincode -ccl go
+   ```
+
+4. Set up wallet and connection profile (see Fabric documentation)
+
+This creates a **completely local blockchain network** on your machine - no registration, no external connections, just like running RabbitMQ or IPFS locally.
+
+#### Chaincode
+
+The chaincode (`blockchain_service/chaincode/model_provenance.go`) implements:
+
+- `RegisterModelUpdate` - Records model version with metadata
+- `RecordValidation` - Records validation results
+- `RollbackModel` - Records rollback events
+- `GetModelProvenance` - Queries provenance chain
+- `VerifyIntegrity` - Verifies hash integrity
+- `GetValidationHistory` - Retrieves validation history
+
+#### Testing Blockchain Service
+
+The service can be tested independently:
+
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# Register model version
+curl -X POST http://localhost:8080/api/v1/model/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model_version_id": "v1",
+    "parent_version_id": null,
+    "hash": "abc123",
+    "metadata": {"iteration": 1}
+  }'
+```
+
+**Integration:** The main service (Python) calls this service via HTTP using the `FabricClient` class in `main_service/blockchain/fabric_client.py`.
 
 ### 5. Update .env for Local Development
 
@@ -310,6 +405,8 @@ pytest tests/test_main/test_storage.py -v
 - **Service not starting**: Check Go version (`go version`) - requires Go 1.21+
 - **Port already in use**: Change `BLOCKCHAIN_SERVICE_PORT` in `.env`
 - **Dependencies missing**: Run `go mod download` in `blockchain_service/` directory
+- **"Running in development mode" message**: This is normal! The service works perfectly in development mode without any blockchain setup. You only need to configure Fabric if you want to use a real blockchain.
+- **Fabric connection errors**: If you're not using Fabric, you can ignore these. The service automatically falls back to development mode.
 
 ### Python Service Issues
 

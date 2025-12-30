@@ -9,8 +9,8 @@ help:
 	@echo "  make clean           - Remove containers, volumes, and images"
 	@echo ""
 	@echo "Testing commands (local):"
-	@echo "  make test            - Run all Python tests (shared, main, client)"
-	@echo "  make test-all        - Run all tests including queue integration and blockchain"
+	@echo "  make test            - Run all tests (shared, main, client, blockchain)"
+	@echo "  make test-all        - Run all tests including queue integration"
 	@echo "  make test-shared     - Run tests for shared utilities"
 	@echo "  make test-main       - Run tests for main service"
 	@echo "  make test-client     - Run tests for client service"
@@ -36,8 +36,8 @@ clean:
 	docker system prune -f
 
 # Test targets (local development)
-test: test-shared test-main test-client
-	@echo "✓ All Python tests passed"
+test: test-shared test-main test-client test-blockchain
+	@echo "✓ All tests passed"
 
 test-all: test test-queue test-blockchain
 	@echo "✓ All tests including integration tests passed"
@@ -56,7 +56,7 @@ test-client:
 
 test-blockchain:
 	@echo "Running blockchain service tests (Go)..."
-	@cd blockchain_service && go test ./... -v || echo "ℹ No blockchain tests found yet"
+	@cd blockchain_service && go test -tags=test -v ./fabric . || (echo "✗ Blockchain service tests failed" && exit 1)
 
 test-queue:
 	@echo "Running queue integration test..."

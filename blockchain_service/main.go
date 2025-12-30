@@ -6,8 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/blockchain-fl/blockchain-service/fabric"
 )
 
 // ModelVersion represents a model version record
@@ -36,16 +38,31 @@ type RollbackEvent struct {
 
 // BlockchainService handles blockchain operations
 type BlockchainService struct {
-	// TODO: Add Fabric SDK client here
-	// For now, using in-memory storage for development
+	fabricClient *fabric.FabricClient
+	// In-memory storage for development mode (when Fabric is not configured)
 	records map[string]ModelVersion
+	useFabric bool
 }
 
 // NewBlockchainService creates a new blockchain service
 func NewBlockchainService() *BlockchainService {
-	return &BlockchainService{
+	service := &BlockchainService{
 		records: make(map[string]ModelVersion),
+		useFabric: false,
 	}
+
+	// Try to initialize Fabric client
+	fabricClient := fabric.NewFabricClient()
+	if err := fabricClient.Initialize(); err == nil {
+		service.fabricClient = fabricClient
+		service.useFabric = true
+		log.Println("Using Hyperledger Fabric for blockchain operations")
+	} else {
+		log.Println("Fabric not configured, using development mode (in-memory storage)")
+		log.Printf("Fabric initialization error: %v", err)
+	}
+
+	return service
 }
 
 // RegisterModelUpdateRequest represents a request to register a model update
@@ -108,19 +125,75 @@ func (bs *BlockchainService) registerModelUpdate(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// TODO: Implement actual Fabric SDK call here
-	// For now, store in memory
-	version := ModelVersion{
-		VersionID:      req.ModelVersionID,
-		ParentVersionID: req.ParentVersionID,
-		Hash:           req.Hash,
-		Metadata:       req.Metadata,
-		Timestamp:      fmt.Sprintf("%d", 0), // TODO: Get actual timestamp
+	var txID string
+	var err error
+
+	if bs.useFabric && bs.fabricClient != nil {
+		// Use Fabric SDK
+		// Extract metadata from request
+		metadataJSON, _ := json.Marshal(req.Metadata)
+		
+		// Extract iteration and num_clients from metadata if present
+		iteration := 0
+		numClients := 0
+		clientIDs := []string{}
+		if iter, ok := req.Metadata["iteration"].(float64); ok {
+			iteration = int(iter)
+		}
+		if num, ok := req.Metadata["num_clients"].(float64); ok {
+			numClients = int(num)
+		}
+		if ids, ok := req.Metadata["client_ids"].([]interface{}); ok {
+			for _, id := range ids {
+				if str, ok := id.(string); ok {
+					clientIDs = append(clientIDs, str)
+				}
+			}
+		}
+		clientIDsJSON, _ := json.Marshal(clientIDs)
+		
+		// Get diff_hash and ipfs_cid from metadata
+		diffHash := ""
+		ipfsCID := ""
+		if dh, ok := req.Metadata["diff_hash"].(string); ok {
+			diffHash = dh
+		}
+		if cid, ok := req.Metadata["ipfs_cid"].(string); ok {
+			ipfsCID = cid
+		}
+
+		txID, err = bs.fabricClient.RegisterModelUpdate(
+			req.ModelVersionID,
+			req.ParentVersionID,
+			req.Hash,
+			diffHash,
+			ipfsCID,
+			string(metadataJSON),
+			iteration,
+			numClients,
+			string(clientIDsJSON),
+		)
+		if err != nil {
+			log.Printf("Fabric transaction failed: %v, falling back to in-memory storage", err)
+			bs.useFabric = false // Fallback to in-memory
+		}
 	}
-	bs.records[req.ModelVersionID] = version
+
+	if !bs.useFabric {
+		// Fallback to in-memory storage
+		version := ModelVersion{
+			VersionID:      req.ModelVersionID,
+			ParentVersionID: req.ParentVersionID,
+			Hash:           req.Hash,
+			Metadata:       req.Metadata,
+			Timestamp:      fmt.Sprintf("%d", time.Now().Unix()),
+		}
+		bs.records[req.ModelVersionID] = version
+		txID = fmt.Sprintf("tx_%s", req.ModelVersionID)
+	}
 
 	response := RegisterModelUpdateResponse{
-		TransactionID: fmt.Sprintf("tx_%s", req.ModelVersionID),
+		TransactionID: txID,
 		Status:        "success",
 	}
 
@@ -135,12 +208,31 @@ func (bs *BlockchainService) recordValidation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// TODO: Implement actual Fabric SDK call here
-	// For now, just log
-	log.Printf("Validation recorded: version=%s, accuracy=%.4f", req.ModelVersionID, req.Accuracy)
+	var txID string
+	var err error
+
+	if bs.useFabric && bs.fabricClient != nil {
+		// Use Fabric SDK
+		metricsJSON, _ := json.Marshal(req.Metrics)
+		txID, err = bs.fabricClient.RecordValidation(
+			req.ModelVersionID,
+			req.Accuracy,
+			string(metricsJSON),
+		)
+		if err != nil {
+			log.Printf("Fabric transaction failed: %v, falling back to in-memory storage", err)
+			bs.useFabric = false
+		}
+	}
+
+	if !bs.useFabric {
+		// Fallback to in-memory storage
+		log.Printf("Validation recorded: version=%s, accuracy=%.4f", req.ModelVersionID, req.Accuracy)
+		txID = fmt.Sprintf("tx_validation_%s", req.ModelVersionID)
+	}
 
 	response := RecordValidationResponse{
-		TransactionID: fmt.Sprintf("tx_validation_%s", req.ModelVersionID),
+		TransactionID: txID,
 		Status:        "success",
 	}
 
@@ -155,11 +247,35 @@ func (bs *BlockchainService) rollbackModel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// TODO: Implement actual Fabric SDK call here
-	log.Printf("Rollback requested: target_version=%s, reason=%s", req.TargetVersionID, req.Reason)
+	var txID string
+	var err error
+
+	if bs.useFabric && bs.fabricClient != nil {
+		// Use Fabric SDK
+		// Determine current version (would need to track this, for now use empty)
+		fromVersionID := "" // In a real implementation, track current version
+		triggeredBy := "automatic" // Could be extracted from request metadata
+		
+		txID, err = bs.fabricClient.RollbackModel(
+			fromVersionID,
+			req.TargetVersionID,
+			req.Reason,
+			triggeredBy,
+		)
+		if err != nil {
+			log.Printf("Fabric transaction failed: %v, falling back to in-memory storage", err)
+			bs.useFabric = false
+		}
+	}
+
+	if !bs.useFabric {
+		// Fallback to in-memory storage
+		log.Printf("Rollback requested: target_version=%s, reason=%s", req.TargetVersionID, req.Reason)
+		txID = fmt.Sprintf("tx_rollback_%s", req.TargetVersionID)
+	}
 
 	response := RollbackModelResponse{
-		TransactionID: fmt.Sprintf("tx_rollback_%s", req.TargetVersionID),
+		TransactionID: txID,
 		Status:        "success",
 	}
 
@@ -171,6 +287,20 @@ func (bs *BlockchainService) getProvenance(w http.ResponseWriter, r *http.Reques
 	vars := mux.Vars(r)
 	versionID := vars["version_id"]
 
+	if bs.useFabric && bs.fabricClient != nil {
+		// Use Fabric SDK
+		provenanceJSON, err := bs.fabricClient.GetModelProvenance(versionID)
+		if err == nil {
+			// Return the JSON directly from Fabric
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(provenanceJSON)
+			return
+		}
+		log.Printf("Fabric query failed: %v, falling back to in-memory storage", err)
+		bs.useFabric = false
+	}
+
+	// Fallback to in-memory storage
 	version, exists := bs.records[versionID]
 	if !exists {
 		http.Error(w, "Version not found", http.StatusNotFound)
@@ -204,6 +334,13 @@ func main() {
 	}
 
 	service := NewBlockchainService()
+	
+	// Cleanup on exit
+	defer func() {
+		if service.fabricClient != nil {
+			service.fabricClient.Close()
+		}
+	}()
 
 	r := mux.NewRouter()
 	r.HandleFunc("/health", service.health).Methods("GET")
@@ -213,6 +350,12 @@ func main() {
 	r.HandleFunc("/api/v1/model/provenance/{version_id}", service.getProvenance).Methods("GET")
 
 	log.Printf("Blockchain service starting on port %s", port)
+	if service.useFabric {
+		log.Println("✓ Connected to Hyperledger Fabric network")
+	} else {
+		log.Println("⚠ Running in development mode (in-memory storage)")
+		log.Println("  To use Fabric, configure FABRIC_NETWORK_PROFILE and FABRIC_WALLET_PATH")
+	}
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), r))
 }
 
