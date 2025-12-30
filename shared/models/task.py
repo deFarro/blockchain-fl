@@ -64,9 +64,11 @@ class BlockchainWriteTaskPayload(TaskPayload):
 class StorageWriteTaskPayload(TaskPayload):
     """Payload for STORAGE_WRITE tasks."""
 
-    blockchain_hash: str = Field(..., description="Hash from blockchain transaction")
-    encrypted_diff: bytes = Field(
-        ..., description="Encrypted weight diff to store on IPFS"
+    aggregated_diff: str = Field(
+        ..., description="Aggregated weight diff as JSON string (to be encrypted)"
+    )
+    blockchain_hash: str = Field(
+        ..., description="Expected hash of encrypted diff (from blockchain transaction)"
     )
     model_version_id: str = Field(..., description="Model version identifier")
 
