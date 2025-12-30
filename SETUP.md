@@ -229,6 +229,48 @@ All sensitive configuration is in `.env` file:
 - Service ports
 - Client IDs and dataset paths
 
+## Testing Queue Infrastructure
+
+After setting up the environment, you can test the queue infrastructure:
+
+### 1. Start RabbitMQ
+
+```bash
+docker-compose up -d rabbitmq
+```
+
+Verify RabbitMQ is running:
+
+```bash
+docker-compose ps rabbitmq
+```
+
+Access RabbitMQ Management UI: http://localhost:15672
+
+- Username: `admin` (or from `.env`)
+- Password: `admin` (or from `.env`)
+
+### 2. Test Queue Publish/Subscribe
+
+Run the test script to verify queue functionality:
+
+```bash
+# Make sure you're in the project root and virtual environment is activated
+source venv/bin/activate  # If using local development
+
+# Run the test script
+python tests/test_shared/test_queue.py
+# Or using pytest
+pytest tests/test_shared/test_queue.py -v
+```
+
+The test script will:
+
+- Create a test task
+- Publish it to a test queue
+- Consume the message
+- Verify successful delivery
+
 ## Troubleshooting
 
 ### Blockchain Service Issues
@@ -243,10 +285,17 @@ All sensitive configuration is in `.env` file:
 - **Port conflicts**: Check if ports 8000 (main-service) are already in use
 - **IPFS connection errors**: Ensure IPFS container is running (`docker-compose ps`)
 
+### Queue Issues
+
+- **Connection refused**: Ensure RabbitMQ is running (`docker-compose ps rabbitmq`)
+- **Authentication failed**: Check `RABBITMQ_USER` and `RABBITMQ_PASSWORD` in `.env`
+- **Queue not found**: Queues are auto-declared, but verify queue name is correct
+- **Messages not being consumed**: Check consumer is running and queue name matches
+- **Test script fails**: Run `python tests/test_shared/test_queue.py` or `pytest tests/test_shared/test_queue.py` with RabbitMQ running and virtual environment activated
+
 ### General Issues
 
 - **Services not communicating**: Check network connectivity and service names in `.env`
-- **Queue connection errors**: Verify RabbitMQ is running and credentials are correct
 - **Missing encryption key**: Generate and set `ENCRYPTION_KEY` in `.env`
 
 ## Next Steps

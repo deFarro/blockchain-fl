@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     @property
     def project_root(self) -> Path:
         """Get project root directory."""
-        return Path(__file__).parent.parent
+        return Path(__file__).parent.parent.parent
 
     @property
     def data_dir(self) -> Path:
@@ -104,3 +104,4 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+

@@ -44,3 +44,17 @@ def setup_logger(name: str, log_level: Optional[str] = None) -> logging.Logger:
     logger.propagate = False
 
     return logger
+
+
+def get_logger(name: str) -> logging.Logger:
+    """
+    Get a logger instance (convenience function).
+
+    Args:
+        name: Logger name (typically __name__)
+
+    Returns:
+        Logger instance
+    """
+    return setup_logger(name)
+

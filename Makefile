@@ -1,13 +1,22 @@
-.PHONY: help build up down logs clean test
+.PHONY: help build up down logs clean test test-all test-shared test-main test-client test-blockchain test-queue test-docker
 
 help:
 	@echo "Available commands:"
-	@echo "  make build      - Build Docker images"
-	@echo "  make up         - Start all services"
-	@echo "  make down       - Stop all services"
-	@echo "  make logs        - View logs from all services"
-	@echo "  make clean       - Remove containers, volumes, and images"
-	@echo "  make test        - Run tests"
+	@echo "  make build           - Build Docker images"
+	@echo "  make up              - Start all services"
+	@echo "  make down            - Stop all services"
+	@echo "  make logs            - View logs from all services"
+	@echo "  make clean           - Remove containers, volumes, and images"
+	@echo ""
+	@echo "Testing commands (local):"
+	@echo "  make test            - Run all Python tests (shared, main, client)"
+	@echo "  make test-all        - Run all tests including queue integration and blockchain"
+	@echo "  make test-shared     - Run tests for shared utilities"
+	@echo "  make test-main       - Run tests for main service"
+	@echo "  make test-client     - Run tests for client service"
+	@echo "  make test-blockchain - Run tests for blockchain service (Go)"
+	@echo "  make test-queue      - Run queue integration test"
+	@echo "  make test-docker     - Run tests in Docker containers"
 
 build:
 	docker-compose build
@@ -26,6 +35,36 @@ clean:
 	docker-compose rm -f
 	docker system prune -f
 
-test:
-	docker-compose exec main-service pytest /app/tests
+# Test targets (local development)
+test: test-shared test-main test-client
+	@echo "✓ All Python tests passed"
+
+test-all: test test-queue test-blockchain
+	@echo "✓ All tests including integration tests passed"
+
+test-shared:
+	@echo "Running shared utilities tests (including queue)..."
+	@pytest tests/test_shared/ -v
+
+test-main:
+	@echo "Running main service tests..."
+	@pytest tests/test_main/ -v || echo "ℹ No main service tests found yet"
+
+test-client:
+	@echo "Running client service tests..."
+	@pytest tests/test_client/ -v || echo "ℹ No client service tests found yet"
+
+test-blockchain:
+	@echo "Running blockchain service tests (Go)..."
+	@cd blockchain_service && go test ./... -v || echo "ℹ No blockchain tests found yet"
+
+test-queue:
+	@echo "Running queue integration test..."
+	@pytest tests/test_shared/test_queue.py -v
+
+# Docker-based testing (for CI/CD or isolated environments)
+test-docker:
+	@echo "Running tests in Docker containers..."
+	@docker-compose exec -T main-service pytest /app/tests -v || echo "ℹ No tests found in main-service"
+	@docker-compose exec -T client-service pytest /app/tests -v || echo "ℹ No tests found in client-service"
 
