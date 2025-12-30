@@ -92,21 +92,17 @@ def test_publish_subscribe():
             consumer.stop()
 
         # Verify
-        if received_tasks:
-            print(f"\n✓ Success! Received {len(received_tasks)} task(s)")
-            for task in received_tasks:
-                print(f"  - Task ID: {task.task_id}, Type: {task.task_type}")
-            return True
-        else:
-            print("\n✗ Failed! No tasks received")
-            return False
+        assert len(received_tasks) > 0, "No tasks were received"
+        print(f"\n✓ Success! Received {len(received_tasks)} task(s)")
+        for task in received_tasks:
+            print(f"  - Task ID: {task.task_id}, Type: {task.task_type}")
 
     except Exception as e:
         print(f"\n✗ Error: {str(e)}")
         import traceback
 
         traceback.print_exc()
-        return False
+        raise
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 import logging
 import sys
 from typing import Optional
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 from shared.config import settings
 
 
@@ -33,7 +33,7 @@ def setup_logger(name: str, log_level: Optional[str] = None) -> logging.Logger:
     console_handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
     # Use JSON formatter for structured logging
-    formatter = jsonlogger.JsonFormatter(
+    formatter = JsonFormatter(
         "%(asctime)s %(name)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     console_handler.setFormatter(formatter)
@@ -57,4 +57,3 @@ def get_logger(name: str) -> logging.Logger:
         Logger instance
     """
     return setup_logger(name)
-

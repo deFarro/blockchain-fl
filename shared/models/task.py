@@ -2,7 +2,7 @@
 
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 
@@ -131,7 +131,8 @@ class TaskMetadata(BaseModel):
     """Task metadata."""
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Task creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Task creation timestamp",
     )
     priority: int = Field(
         default=0, description="Task priority (higher = more important)"
