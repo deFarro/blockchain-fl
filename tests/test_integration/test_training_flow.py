@@ -93,12 +93,11 @@ def test_complete_training_iteration():
     client_id = 0
 
     train_task = Task(
-        task_id=f"test-train-{iteration}-client_{client_id}-{int(time.time())}",
+        task_id=f"test-train-{iteration}-{int(time.time())}",
         task_type=TaskType.TRAIN,
         payload={
             "weights_cid": ipfs_cid,
             "iteration": iteration,
-            "client_id": f"client_{client_id}",
         },
         metadata=TaskMetadata(source="integration_test"),
         model_version_id=None,
@@ -106,9 +105,10 @@ def test_complete_training_iteration():
     )
 
     print(
-        f"Step 1: Publishing TRAIN task for client_{client_id}, iteration {iteration}"
+        f"Step 1: Publishing universal TRAIN task for iteration {iteration} (all clients will receive)"
     )
-    publisher.publish_task(train_task, "train_queue")
+    # Use fanout exchange so all clients receive the message simultaneously
+    publisher.publish_task(train_task, "train_queue", use_fanout=True)
     print("✓ TRAIN task published")
 
     # Step 2: Client processes TRAIN task

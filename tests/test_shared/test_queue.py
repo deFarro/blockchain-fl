@@ -40,7 +40,6 @@ def test_publish_subscribe():
         payload=TrainTaskPayload(
             weights_cid=None,
             iteration=1,
-            client_id="client_0",
         ).model_dump(),
         metadata=TaskMetadata(source="test_script"),
     )
@@ -81,7 +80,6 @@ def test_publish_subscribe():
                 payload=TrainTaskPayload(
                     weights_cid=None,
                     iteration=2,
-                    client_id="client_1",
                 ).model_dump(),
                 metadata=TaskMetadata(source="test_script"),
             )

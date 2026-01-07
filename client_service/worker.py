@@ -4,6 +4,8 @@ import asyncio
 import json
 import os
 import sys
+import uuid
+import time
 from typing import Optional, Dict, Any
 from client_service.config import config
 from client_service.training.trainer import Trainer
@@ -18,12 +20,6 @@ from shared.config import settings
 from shared.logger import setup_logger
 
 logger = setup_logger(__name__)
-
-
-class TaskNotForThisClient(Exception):
-    """Exception raised when a task is not meant for this client (should be requeued)."""
-
-    pass
 
 
 class ClientWorker:
@@ -45,10 +41,14 @@ class ClientWorker:
         self.connection = connection or QueueConnection()
         self.consumer = QueueConsumer(connection=self.connection)
         self.publisher = QueuePublisher(connection=self.connection)
-        self.client_id = config.get_client_id()
+
+        # Generate a unique client instance ID for this client instance
+        self.instance_id = str(uuid.uuid4())[
+            :8
+        ]  # Use first 8 chars of UUID for readability
         self.running = False
 
-        logger.info(f"Client worker initialized for client_id={self.client_id}")
+        logger.info(f"Client worker initialized with instance_id={self.instance_id}")
 
     def _load_weights_from_cid(
         self, weights_cid: Optional[str]
@@ -138,32 +138,17 @@ class ClientWorker:
             True if successful, False otherwise
         """
         try:
-            logger.info(f"Processing TRAIN task: {task.task_id}")
+            receive_time = time.time()
+            logger.info(
+                f"Processing TRAIN task: {task.task_id} (received at {receive_time:.3f})"
+            )
 
             # Parse payload
             payload = TrainTaskPayload(**task.payload)
 
-            # Check if this task is for this client
-            task_client_id = payload.client_id
-            if task_client_id is not None:
-                # Extract numeric client ID from string (e.g., "client_0" -> 0)
-                if task_client_id.startswith("client_"):
-                    task_client_id_num = int(task_client_id.split("_")[1])
-                else:
-                    task_client_id_num = int(task_client_id)
-
-                if task_client_id_num != self.client_id:
-                    logger.debug(
-                        f"Task {task.task_id} is for client {task_client_id_num}, "
-                        f"but this is client {self.client_id}. Will be requeued for correct client."
-                    )
-                    # Raise exception to trigger requeueing
-                    # With higher prefetch_count, other clients can process their messages
-                    # while this client holds messages not meant for it
-                    raise TaskNotForThisClient(
-                        f"Task {task.task_id} is for client {task_client_id_num}, "
-                        f"not client {self.client_id}"
-                    )
+            # Universal tasks: all clients process the same training task
+            # All clients train on the same iteration with the same weights
+            # Clients use their own instance_id when sending updates
 
             # Load previous weights if provided
             previous_weights = self._load_weights_from_cid(payload.weights_cid)
@@ -171,11 +156,11 @@ class ClientWorker:
             # Train the model
             logger.info(
                 f"Starting training for iteration {payload.iteration}, "
-                f"client_id={self.client_id}"
+                f"instance_id={self.instance_id}"
             )
 
             weight_diff, metrics, initial_weights = self.trainer.train(
-                previous_weights=previous_weights
+                previous_weights=previous_weights, instance_id=self.instance_id
             )
 
             logger.info(
@@ -191,7 +176,7 @@ class ClientWorker:
             # Create client update payload (simple dict, not a Task)
             # The aggregation worker will collect these and create an AGGREGATE task
             client_update = {
-                "client_id": f"client_{self.client_id}",
+                "client_id": self.instance_id,  # Use instance_id as the client identifier
                 "iteration": payload.iteration,
                 "weight_diff": weight_diff_str,  # Serialized as JSON string
                 "metrics": metrics,
@@ -206,7 +191,7 @@ class ClientWorker:
                 self.publisher.publish_dict(client_update, queue_name)
                 logger.info(
                     f"Published weight update to queue '{queue_name}' for task {task.task_id} "
-                    f"(iteration={payload.iteration}, client_id=client_{self.client_id})"
+                    f"(iteration={payload.iteration}, instance_id={self.instance_id})"
                 )
             except Exception as e:
                 logger.error(
@@ -293,26 +278,27 @@ class ClientWorker:
             queue_name: Name of the queue to consume from
         """
         self.running = True
-        logger.info(f"Starting client worker for client_id={self.client_id}")
+        logger.info(f"Starting client worker for instance_id={self.instance_id}")
 
         def task_handler(task: Task):
             """Handle received task."""
             try:
                 success = self._handle_task(task)
                 if not success:
-                    logger.error(f"Failed to process task {task.task_id}")
-            except TaskNotForThisClient:
-                # Re-raise this exception so the consumer can requeue the message
-                raise
+                    # Raise exception to trigger nack and requeue
+                    # This ensures failed tasks are not removed from the queue
+                    raise Exception(f"Task {task.task_id} processing failed")
             except Exception as e:
                 logger.error(
-                    f"Unexpected error handling task {task.task_id}: {str(e)}",
+                    f"Error handling task {task.task_id}: {str(e)}",
                     exc_info=True,
                 )
+                # Re-raise to trigger nack and requeue in consumer
+                raise
 
         try:
-            # Start consuming from single queue
-            # All clients consume from the same queue, but only process messages for their client_id
+            # Start consuming from fanout exchange
+            # All clients receive the same message simultaneously via their own queues
             # Use higher prefetch_count to allow clients to hold multiple messages,
             # preventing one client from monopolizing the queue
             num_clients = getattr(settings, "num_clients", 2)
@@ -321,10 +307,21 @@ class ClientWorker:
             )  # At least as many as clients, minimum 5
 
             logger.info(
-                f"Consuming tasks from queue: {queue_name} (prefetch_count={prefetch_count})"
+                f"Consuming tasks from queue: {queue_name} (prefetch_count={prefetch_count}, use_fanout=True)"
+            )
+            # Use fanout exchange so all clients receive the same message simultaneously
+            # Each client gets its own queue bound to the fanout exchange
+            # Use unique instance_id to ensure each client instance has a unique queue
+            consumer_id = f"client_{self.instance_id}"
+            logger.info(
+                f"Using unique consumer_id: {consumer_id} (instance_id={self.instance_id})"
             )
             self.consumer.consume_tasks(
-                queue_name, task_handler, prefetch_count=prefetch_count
+                queue_name,
+                task_handler,
+                prefetch_count=prefetch_count,
+                use_fanout=True,
+                consumer_id=consumer_id,
             )
         except KeyboardInterrupt:
             logger.info("Received interrupt signal. Stopping worker...")

@@ -60,7 +60,7 @@ def test_trainer_basic():
     print("✓ Trainer created")
 
     # Test dataset loading
-    train_loader, train_dataset = trainer.load_dataset(client_id=0)
+    train_loader, train_dataset = trainer.load_dataset(instance_id="test_client_0")
     assert len(train_dataset) > 0, "Dataset should not be empty"
     print(f"✓ Dataset loaded: {len(train_dataset)} samples")
 
@@ -79,7 +79,7 @@ def test_weight_diff():
     print("\nTesting weight diff computation...")
 
     trainer = Trainer(learning_rate=0.001, batch_size=32, epochs=1)
-    train_loader, _ = trainer.load_dataset(client_id=0)
+    train_loader, _ = trainer.load_dataset(instance_id="test_client_0")
 
     # Get initial weights
     initial_weights = trainer.get_model().get_weights()

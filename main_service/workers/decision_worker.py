@@ -204,33 +204,34 @@ class DecisionWorker:
         self, iteration: int, weights_cid: Optional[str] = None
     ) -> None:
         """
-        Publish TRAIN tasks for all clients.
+        Publish a universal TRAIN task for all clients.
 
         Args:
             iteration: Training iteration number
             weights_cid: IPFS CID of model weights (if None, clients start from scratch)
         """
-        logger.info(f"Publishing TRAIN tasks for iteration {iteration}")
+        logger.info(f"Publishing universal TRAIN task for iteration {iteration}")
 
-        for client_id in range(self.num_clients):
-            train_task = Task(
-                task_id=f"train-iter{iteration}-client{client_id}-{int(time.time() * 1000)}",
-                task_type=TaskType.TRAIN,
-                payload=TrainTaskPayload(
-                    weights_cid=weights_cid,
-                    iteration=iteration,
-                    client_id=f"client_{client_id}",
-                ).model_dump(),
-                metadata=TaskMetadata(source="decision_worker"),
-                model_version_id=None,
-                parent_version_id=None,
-            )
+        # Publish a single universal task - all clients will process it
+        # Clients use their own instance_id when sending updates
+        train_task = Task(
+            task_id=f"train-iter{iteration}-{int(time.time() * 1000)}",
+            task_type=TaskType.TRAIN,
+            payload=TrainTaskPayload(
+                weights_cid=weights_cid,
+                iteration=iteration,
+            ).model_dump(),
+            metadata=TaskMetadata(source="decision_worker"),
+            model_version_id=None,
+            parent_version_id=None,
+        )
 
-            self.publisher.publish_task(task=train_task, queue_name="train_queue")
-            logger.debug(f"Published TRAIN task for client_{client_id} (via fanout)")
-
+        # Use fanout exchange so all clients receive the message simultaneously
+        self.publisher.publish_task(
+            task=train_task, queue_name="train_queue", use_fanout=True
+        )
         logger.info(
-            f"✓ Published {self.num_clients} TRAIN tasks for iteration {iteration}"
+            f"✓ Published universal TRAIN task for iteration {iteration} via fanout exchange (all clients will receive simultaneously)"
         )
 
     def _publish_rollback_task(

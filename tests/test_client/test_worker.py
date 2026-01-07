@@ -35,21 +35,20 @@ def test_worker_train_task():
     # Set client ID for testing
     os.environ["CLIENT_ID"] = "0"
 
-    # Create a test task
+    # Create a test task (client_id is optional - universal tasks don't require it)
     test_task = Task(
         task_id="test-train-001",
         task_type=TaskType.TRAIN,
         payload=TrainTaskPayload(
             weights_cid=None,  # Start from scratch
             iteration=1,
-            client_id="client_0",
         ).model_dump(),
         metadata=TaskMetadata(source="test_script"),
     )
 
     print(f"Created test task: {test_task.task_id}")
     print(f"Task type: {test_task.task_type}")
-    print(f"Client ID: {test_task.payload['client_id']}")
+    print(f"Iteration: {test_task.payload['iteration']}")
     print()
 
     # Note: We don't actually need to publish to RabbitMQ for this test
@@ -73,9 +72,11 @@ def test_worker_train_task():
     # Process task directly (for testing, not using consume loop)
     print("Processing task...")
     success = worker._handle_train_task(test_task)
-    
+
     # Verify that publish_dict was called (worker tried to publish the update)
-    assert mock_publisher.publish_dict.called, "Worker should attempt to publish client update"
+    assert (
+        mock_publisher.publish_dict.called
+    ), "Worker should attempt to publish client update"
 
     assert success, "Task processing should succeed"
     print("✓ Task processed successfully")

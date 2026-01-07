@@ -61,19 +61,30 @@ class Trainer:
         )
 
     def load_dataset(
-        self, client_id: Optional[int] = None
+        self, instance_id: Optional[str] = None
     ) -> Tuple[DataLoader, Dataset]:
         """
         Load training dataset for this client.
 
         Args:
-            client_id: Client ID (uses config if None)
+            instance_id: Client instance ID (string). If None, generates a random one.
+                        Converted to numeric value for dataset splitting.
 
         Returns:
             Tuple of (DataLoader, Dataset)
         """
-        if client_id is None:
-            client_id = config.get_client_id()
+        # Convert instance_id (string) to numeric client_id for dataset splitting
+        # Use hash to get consistent numeric value from string
+        if instance_id is None:
+            import uuid
+            instance_id = str(uuid.uuid4())[:8]
+        
+        # Convert instance_id string to numeric value in range [0, num_clients)
+        # Use hash for consistent mapping
+        numeric_client_id = hash(instance_id) % config.num_clients
+        # Ensure positive value
+        if numeric_client_id < 0:
+            numeric_client_id = (-numeric_client_id) % config.num_clients
 
         # Load dataset using factory function
         dataset_loader = get_dataset(
@@ -82,7 +93,7 @@ class Trainer:
             seed=config.dataset_seed,
         )
         train_dataset = dataset_loader.load_training_data(
-            client_id=client_id,
+            client_id=numeric_client_id,
             num_clients=config.num_clients,
             split_type=config.split_type,
             seed=config.dataset_seed,
@@ -99,7 +110,7 @@ class Trainer:
         # PyTorch Dataset implements __len__, but mypy doesn't know this
         # Cast to help mypy understand that Dataset has __len__
         dataset_len = len(cast(Any, train_dataset))
-        logger.info(f"Loaded dataset for client {client_id}: {dataset_len} samples")
+        logger.info(f"Loaded dataset for instance {instance_id} (numeric_id={numeric_client_id}): {dataset_len} samples")
 
         return train_loader, train_dataset
 
@@ -147,7 +158,7 @@ class Trainer:
     def train(
         self,
         train_loader: Optional[DataLoader] = None,
-        client_id: Optional[int] = None,
+        instance_id: Optional[str] = None,
         previous_weights: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, float], Dict[str, Any]]:
         """
@@ -155,7 +166,7 @@ class Trainer:
 
         Args:
             train_loader: DataLoader for training (loads dataset if None)
-            client_id: Client ID (uses config if None)
+            instance_id: Client instance ID (string). Used for dataset splitting.
             previous_weights: Previous model weights for diff computation
 
         Returns:
@@ -166,7 +177,7 @@ class Trainer:
         """
         # Load dataset if not provided
         if train_loader is None:
-            train_loader, _ = self.load_dataset(client_id=client_id)
+            train_loader, _ = self.load_dataset(instance_id=instance_id)
 
         # Store initial weights if computing diff
         if previous_weights is not None:

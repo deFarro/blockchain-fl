@@ -131,7 +131,7 @@ async def startup_event():
                         success = aggregation_worker.process_client_updates(
                             queue_name="client_updates",
                             iteration=current_iteration,
-                            timeout=60,  # Wait up to 60 seconds for updates
+                            timeout=getattr(settings, "aggregation_timeout"),
                             min_clients=2,  # Require at least 2 clients
                         )
 
@@ -220,4 +220,10 @@ if __name__ == "__main__":
     host = getattr(settings, "api_host", "0.0.0.0")
 
     logger.info(f"Starting API server on {host}:{port}")
-    uvicorn.run(app, host=host, port=port)
+    # Disable access logs to reduce verbosity (application logs still work)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        access_log=False,  # Disable HTTP access logs to reduce noise from polling
+    )

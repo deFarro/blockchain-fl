@@ -1,6 +1,6 @@
 services:
   rabbitmq:
-    image: rabbitmq:3.12-management-alpine
+    image: rabbitmq:3.13-management-alpine
     container_name: blockchain-fl-rabbitmq
     ports:
       - "${RABBITMQ_PORT:-5672}:5672"      # AMQP port
@@ -111,7 +111,7 @@ services:
       - NUM_CLIENTS=${NUM_CLIENTS:-2}  # Total number of client replicas
       - SPLIT_TYPE=${SPLIT_TYPE:-iid}  # iid or non_iid
       - DATASET_SEED=${DATASET_SEED:-42}  # Seed for dataset splitting
-      - EPOCHS=${EPOCHS:-10}  # Number of training epochs per iteration
+      - EPOCHS=${EPOCHS:-1}  # Number of training epochs per iteration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ENVIRONMENT=${ENVIRONMENT:-development}
     volumes:

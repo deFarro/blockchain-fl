@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # Aggregation Configuration (for main service)
     min_clients_for_aggregation: int = 2
-    aggregation_timeout: int = 30  # seconds to wait for client updates
+    aggregation_timeout: int = 300  # seconds to wait for client updates
 
     # Client Exclusion Configuration (for regression diagnosis)
     enable_client_exclusion: bool = (

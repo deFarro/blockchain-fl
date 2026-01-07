@@ -32,9 +32,6 @@ class TrainTaskPayload(TaskPayload):
         None, description="IPFS CID of model weights to start training from"
     )
     iteration: int = Field(..., description="Training iteration number")
-    client_id: Optional[str] = Field(
-        None, description="Client ID for this training task"
-    )
 
 
 class AggregateTaskPayload(TaskPayload):

@@ -7,6 +7,8 @@ import queue as thread_queue
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
 import torch
+import pika
+from pika.channel import Channel
 from shared.config import settings
 from shared.queue.consumer import QueueConsumer
 from shared.queue.publisher import QueuePublisher
@@ -185,7 +187,7 @@ class AggregationWorker:
 
         logger.info(
             f"Collecting client updates for iteration {iteration} "
-            f"(min_clients={min_clients}, updates_collected={len(updates)}, timeout={timeout}s)"
+            f"(min_clients={min_clients}, timeout={timeout}s)"
         )
 
         def message_handler(message: Dict[str, Any]):
@@ -249,6 +251,8 @@ class AggregationWorker:
         stop_flag = threading.Event()
         error_occurred = threading.Event()
         error_info: List[Exception] = []
+        # Store consumer reference so main thread can stop it
+        collection_consumer_ref: List[Optional[QueueConsumer]] = [None]
 
         def consume_messages():
             """Consume messages in a separate thread and put them in a queue."""
@@ -256,45 +260,116 @@ class AggregationWorker:
             # This avoids reentrancy issues when multiple collections happen concurrently
             collection_connection = QueueConnection()
             collection_consumer = QueueConsumer(connection=collection_connection)
+            collection_consumer_ref[0] = collection_consumer
 
             try:
 
-                def queue_handler(message: Dict[str, Any]):
+                def queue_handler(
+                    message: Dict[str, Any],
+                    channel: Optional[Channel] = None,
+                    delivery_tag: Optional[int] = None,
+                ):
                     """Handler that puts messages in thread-safe queue."""
                     # Check if we should stop
                     if stop_flag.is_set():
                         logger.debug("Stop flag set, ignoring message")
+                        if channel and delivery_tag:
+                            # Reject and requeue so other consumers can process
+                            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
                         return
 
                     msg_iteration = message.get("iteration")
                     client_id = message.get("client_id", "unknown")
+
+                    # Ensure iteration is an integer for comparison
+                    try:
+                        msg_iteration = (
+                            int(msg_iteration) if msg_iteration is not None else None
+                        )
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            f"Invalid iteration in message from {client_id}: {msg_iteration}"
+                        )
+                        msg_iteration = None
+
                     logger.debug(
-                        f"Received message from queue: client={client_id}, iteration={msg_iteration}"
+                        f"Received message from queue: client={client_id}, iteration={msg_iteration}, target_iteration={iteration}"
                     )
 
+                    # Only process messages for the current iteration
+                    # Reject and requeue messages for other iterations
+                    if msg_iteration != iteration:
+                        if channel and delivery_tag:
+                            if msg_iteration is not None and msg_iteration < iteration:
+                                # Late update for past iteration - reject without requeue
+                                logger.debug(
+                                    f"Rejecting late update from {client_id} for iteration {msg_iteration} "
+                                    f"(currently processing iteration {iteration})"
+                                )
+                                channel.basic_nack(
+                                    delivery_tag=delivery_tag, requeue=False
+                                )
+                            elif (
+                                msg_iteration is not None and msg_iteration > iteration
+                            ):
+                                # Future iteration - requeue for later processing
+                                logger.debug(
+                                    f"Requeuing message from {client_id} for future iteration {msg_iteration} "
+                                    f"(currently processing iteration {iteration})"
+                                )
+                                channel.basic_nack(
+                                    delivery_tag=delivery_tag, requeue=True
+                                )
+                            else:
+                                # Invalid iteration - reject without requeue
+                                logger.warning(
+                                    f"Rejecting message from {client_id} with invalid iteration: {msg_iteration}"
+                                )
+                                channel.basic_nack(
+                                    delivery_tag=delivery_tag, requeue=False
+                                )
+                        return
+
+                    # Message matches current iteration - queue it for processing
                     try:
                         message_queue.put(message, timeout=1.0)
                         logger.debug(f"Message queued successfully from {client_id}")
+                        # Acknowledge message only after successfully queuing
+                        if channel and delivery_tag:
+                            channel.basic_ack(delivery_tag=delivery_tag)
                     except thread_queue.Full:
                         logger.warning(
                             f"Message queue full, dropping message from {client_id}"
                         )
+                        # Reject and requeue if queue is full
+                        if channel and delivery_tag:
+                            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
 
-                # Consume messages (blocking call)
+                # Consume messages (blocking call) with manual acknowledgment
                 # This will block until stop_flag is set or connection is closed
-                collection_consumer.consume_dict(queue_name, queue_handler)
+                collection_consumer.consume_dict(
+                    queue_name, queue_handler, auto_ack=False
+                )
             except Exception as e:
                 error_occurred.set()
                 error_info.append(e)
                 logger.error(f"Error in consumer thread: {str(e)}", exc_info=True)
             finally:
                 # Clean up the collection-specific connection
+                # Note: stop() may have already been called from main thread
+                # but it's idempotent, so calling it again is safe
                 try:
+                    # Stop consuming (idempotent - safe to call multiple times)
+                    # This ensures consuming is stopped even if main thread's stop() failed
                     collection_consumer.stop()
+                    # Close connection after consumer is stopped
+                    # The connection will be closed gracefully
                     collection_connection.close()
                 except Exception as e:
                     logger.debug(f"Error closing collection connection: {str(e)}")
-                stop_flag.set()  # Signal that consumption has stopped
+                finally:
+                    # Always set stop flag, even if cleanup failed
+                    stop_flag.set()  # Signal that consumption has stopped
 
         # Start consumer in a non-daemon thread (so it can be properly joined)
         consumer_thread = threading.Thread(
@@ -307,18 +382,21 @@ class AggregationWorker:
 
         try:
             # Collect messages until we have enough or timeout
+            deadline_passed = False
             while not stop_flag.is_set():
                 current_time = time.time()
 
                 # Check timeout using deadline (more precise than elapsed time)
-                if current_time >= deadline:
+                if current_time >= deadline and not deadline_passed:
                     elapsed = current_time - start_time
+                    deadline_passed = True
                     logger.warning(
                         f"Timeout reached ({timeout}s, elapsed: {elapsed:.2f}s) "
                         f"while collecting updates. "
-                        f"Got {len(updates)} updates (required: {min_clients})"
+                        f"Got {len(updates)} updates (required: {min_clients}). "
+                        f"Will continue processing queued messages..."
                     )
-                    break
+                    # Don't break immediately - allow processing of messages already in queue
 
                 if len(updates) >= min_clients:
                     elapsed = current_time - start_time
@@ -334,26 +412,35 @@ class AggregationWorker:
                         raise error_info[0]
                     break
 
-                # Calculate remaining time for queue.get timeout (dynamic timeout)
-                remaining_time = max(0.1, deadline - current_time)
-                remaining_time = min(
-                    remaining_time, 0.5
-                )  # Cap at 0.5s for responsiveness
+                # Calculate remaining time for queue.get timeout
+                if deadline_passed:
+                    # After deadline, use short timeout to check queue one more time
+                    # This allows processing messages that were already queued
+                    remaining_time = 0.5  # Short timeout to check queue
+                else:
+                    remaining_time = max(0.1, deadline - current_time)
+                    remaining_time = min(
+                        remaining_time, 0.5
+                    )  # Cap at 0.5s for responsiveness
 
-                # Try to get a message from queue (with dynamic timeout based on deadline)
+                # Try to get a message from queue
                 try:
                     message = message_queue.get(timeout=remaining_time)
-                    # Process message with handler
-                    # Note: Check if message arrived after deadline
-                    if current_time >= deadline:
-                        logger.debug(
-                            f"Message received after deadline, skipping iteration {message.get('iteration')}"
-                        )
-                        continue
+                    # Process the message if it's for the current iteration
+                    # Even if deadline passed, we still want to process queued messages
                     message_handler(message)
                 except thread_queue.Empty:
-                    # No message available, continue waiting
-                    # This is expected when timeout hasn't been reached
+                    # No message available
+                    if deadline_passed:
+                        # Deadline passed and no more messages in queue - we're done
+                        elapsed = time.time() - start_time
+                        logger.warning(
+                            f"No more messages in queue after timeout. "
+                            f"Got {len(updates)} updates (required: {min_clients}) "
+                            f"after {elapsed:.2f}s"
+                        )
+                        break
+                    # Continue waiting if deadline hasn't passed
                     continue
 
         except Exception as e:
@@ -363,6 +450,14 @@ class AggregationWorker:
             # Stop consumer gracefully
             logger.debug("Stopping consumer...")
             stop_flag.set()
+
+            # Stop the consumer from the main thread (consume_dict is blocking)
+            # We need to stop it from outside the consumer thread
+            if collection_consumer_ref[0] is not None:
+                try:
+                    collection_consumer_ref[0].stop()
+                except Exception as e:
+                    logger.debug(f"Error stopping consumer: {str(e)}")
 
             # Wait for consumer thread to finish (with timeout)
             # The consumer thread will stop when consume_dict() is interrupted
@@ -514,10 +609,28 @@ class AggregationWorker:
                 )
                 return False
 
-            if len(client_updates) < min_clients:
+            # Filter excluded clients if exclusion is enabled
+            original_count = len(client_updates)
+            if settings.enable_client_exclusion and settings.excluded_clients:
+                excluded_clients = settings.excluded_clients
+                client_updates = [
+                    update
+                    for update in client_updates
+                    if update.get("client_id") not in excluded_clients
+                ]
+                excluded_count = original_count - len(client_updates)
+                if excluded_count > 0:
+                    logger.info(
+                        f"Filtered out {excluded_count} excluded client(s) from aggregation: "
+                        f"{excluded_clients}. Remaining: {len(client_updates)}/{original_count}"
+                    )
+
+            # Proceed with aggregation if we have at least one client update
+            # Even a single client update can be applied to the current model state
+            if len(client_updates) == 0:
                 logger.warning(
-                    f"Not enough client updates: got {len(client_updates)}, "
-                    f"required {min_clients}"
+                    f"No client updates remaining after filtering excluded clients. "
+                    f"Cannot aggregate with zero clients."
                 )
                 return False
 

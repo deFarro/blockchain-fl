@@ -88,11 +88,13 @@ To run multiple client instances:
 ```bash
 # Scale to 2 clients
 docker-compose up -d --scale client-service=2
-
-# Or set CLIENT_ID environment variable for each instance
-CLIENT_ID=client_0 docker-compose up -d client-service
-CLIENT_ID=client_1 docker-compose up -d client-service
 ```
+
+**Note:** Each client instance automatically generates a unique `instance_id` (UUID) on startup. No manual client ID configuration is needed. Clients use their `instance_id` for:
+
+- Unique queue names (for fanout exchange consumption)
+- Client identification in updates
+- Dataset splitting (instance_id is hashed to determine data slice)
 
 ## Local Development (Without Docker)
 
@@ -322,7 +324,7 @@ All sensitive configuration is in `.env` file:
 - RabbitMQ credentials
 - Encryption key (ENCRYPTION_KEY or ENCRYPTION_KEY_FILE)
 - Service ports
-- Client IDs and dataset paths
+- Client configuration (num_clients, dataset split type, etc.)
 
 ## Running Tests
 

@@ -202,10 +202,18 @@ class FabricClient:
         try:
             response = await self.client.get("/api/v1/model/list")
             response.raise_for_status()
-            return _parse_json_response(response)
+            result = _parse_json_response(response)
+            if not isinstance(result, dict):
+                logger.warning(f"Unexpected response type from blockchain service: {type(result)}")
+                return {"versions": [], "total": 0}
+            return result
         except httpx.HTTPError as e:
             logger.error(f"Failed to list models: {str(e)}")
-            raise
+            # Return empty response instead of raising to allow graceful degradation
+            return {"versions": [], "total": 0}
+        except Exception as e:
+            logger.error(f"Unexpected error listing models: {str(e)}", exc_info=True)
+            return {"versions": [], "total": 0}
 
     async def health_check(self) -> bool:
         """

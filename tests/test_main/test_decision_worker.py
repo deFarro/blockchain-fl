@@ -349,18 +349,21 @@ def test_decision_worker_publish_train_tasks():
     # Publish train tasks
     worker._publish_train_tasks(iteration=1, weights_cid="QmTest123")
 
-    # Verify tasks were published
-    assert mock_publisher.publish_task.call_count == 3
+    # Verify a single universal task was published (not one per client)
+    assert mock_publisher.publish_task.call_count == 1
 
-    # Check each task
-    for i, call in enumerate(mock_publisher.publish_task.call_args_list):
-        task = call.kwargs["task"]
-        assert task.task_type == TaskType.TRAIN
-        assert task.payload["iteration"] == 1
-        assert task.payload["weights_cid"] == "QmTest123"
-        assert task.payload["client_id"] == f"client_{i}"
+    # Check the universal task
+    call = mock_publisher.publish_task.call_args_list[0]
+    task = call.kwargs["task"]
+    assert task.task_type == TaskType.TRAIN
+    assert task.payload["iteration"] == 1
+    assert task.payload["weights_cid"] == "QmTest123"
+    # Universal tasks don't include client_id - clients use their own instance_id when sending updates
+    
+    # Verify fanout exchange is used
+    assert call.kwargs.get("use_fanout") == True, "Should use fanout exchange for universal tasks"
 
-    print("✓ TRAIN tasks published correctly for all clients")
+    print("✓ Universal TRAIN task published correctly (all clients will receive via fanout)")
 
     print("=" * 60)
     print("✓ Test PASSED")
@@ -503,15 +506,17 @@ def test_decision_worker_handle_decision_continue_training():
     assert worker.state.best_accuracy == 90.0
     assert len(worker.state.accuracy_history) == 1
 
-    # Verify TRAIN tasks were published
+    # Verify universal TRAIN task was published (via fanout exchange)
     assert mock_publisher.publish_task.called
     train_calls = [
         call
         for call in mock_publisher.publish_task.call_args_list
         if call.kwargs["task"].task_type == TaskType.TRAIN
     ]
-    assert len(train_calls) == 2  # One for each client
-    print("✓ Decision task handled correctly, TRAIN tasks published")
+    assert len(train_calls) == 1  # Single universal task via fanout exchange
+    # Verify fanout exchange is used
+    assert train_calls[0].kwargs.get("use_fanout") == True, "Should use fanout exchange for universal tasks"
+    print("✓ Decision task handled correctly, universal TRAIN task published via fanout exchange")
 
     print("=" * 60)
     print("✓ Test PASSED")
@@ -577,14 +582,16 @@ def test_decision_worker_handle_decision_rollback():
     ]
     assert len(rollback_calls) == 1
 
-    # Verify TRAIN tasks were published (to continue from rollback)
+    # Verify universal TRAIN task was published (to continue from rollback via fanout exchange)
     train_calls = [
         call
         for call in mock_publisher.publish_task.call_args_list
         if call.kwargs["task"].task_type == TaskType.TRAIN
     ]
-    assert len(train_calls) == 2  # One for each client
-    print("✓ Rollback correctly triggered, ROLLBACK and TRAIN tasks published")
+    assert len(train_calls) == 1  # Single universal task via fanout exchange
+    # Verify fanout exchange is used
+    assert train_calls[0].kwargs.get("use_fanout") == True, "Should use fanout exchange for universal tasks"
+    print("✓ Rollback correctly triggered, ROLLBACK and universal TRAIN task published via fanout exchange")
 
     print("=" * 60)
     print("✓ Test PASSED")

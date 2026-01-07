@@ -51,15 +51,34 @@ async def list_models(
         List of model versions
     """
     try:
-        logger.info(f"Listing models (limit={limit}, offset={offset})")
+        logger.debug(f"Listing models (limit={limit}, offset={offset})")
 
         # Query blockchain service for model versions
         async with FabricClient() as blockchain_client:
             blockchain_response = await blockchain_client.list_models()
 
         # Parse response from blockchain service
-        blockchain_versions = blockchain_response.get("versions", [])
+        if not blockchain_response:
+            logger.warning("Blockchain service returned empty response")
+            blockchain_response = {}
+
+        logger.debug(f"Blockchain response: {blockchain_response}")
+
+        blockchain_versions = blockchain_response.get("versions")
+        if blockchain_versions is None:
+            logger.warning(
+                "Blockchain service returned None for versions, using empty list"
+            )
+            blockchain_versions = []
+        elif not isinstance(blockchain_versions, list):
+            logger.warning(
+                f"Blockchain service returned non-list for versions: {type(blockchain_versions)}, using empty list"
+            )
+            blockchain_versions = []
+
         total = blockchain_response.get("total", 0)
+        if not isinstance(total, int):
+            total = len(blockchain_versions)
 
         # Convert to ModelVersionResponse format
         versions: List[ModelVersionResponse] = []
@@ -102,9 +121,9 @@ async def list_models(
             versions.append(version)
 
         # Apply offset and limit
-        if offset > 0:
+        if offset is not None and offset > 0:
             versions = versions[offset:]
-        if limit > 0:
+        if limit is not None and limit > 0:
             versions = versions[:limit]
 
         # Sort by timestamp (newest first) if available
@@ -387,30 +406,29 @@ async def start_training(
                 exc_info=True,
             )
 
-        # Publish initial TRAIN tasks for all clients using fanout exchange
-        # This ensures all clients receive all messages simultaneously
-        for client_id in range(num_clients):
-            train_task = Task(
-                task_id=f"api-train-{iteration}-client_{client_id}-{int(time.time())}",
-                task_type=TaskType.TRAIN,
-                payload={
-                    "weights_cid": initial_weights_cid,
-                    "iteration": iteration,
-                    "client_id": f"client_{client_id}",
-                },
-                metadata=TaskMetadata(source="api_start_training"),
-                model_version_id=None,  # Will be set by decision worker
-                parent_version_id=None,  # Will be set by decision worker
-            )
+        # Publish a single universal TRAIN task for all clients
+        # All clients will process the same task and send their updates
+        train_task = Task(
+            task_id=f"api-train-{iteration}-{int(time.time())}",
+            task_type=TaskType.TRAIN,
+            payload={
+                "weights_cid": initial_weights_cid,
+                "iteration": iteration,
+            },
+            metadata=TaskMetadata(source="api_start_training"),
+            model_version_id=None,  # Will be set by decision worker
+            parent_version_id=None,  # Will be set by decision worker
+        )
 
-            publisher.publish_task(train_task, "train_queue")
-            logger.info(
-                f"Published TRAIN task for client_{client_id}, iteration {iteration} (via fanout)"
-            )
+        # Use fanout exchange so all clients receive the message simultaneously
+        publisher.publish_task(train_task, "train_queue", use_fanout=True)
+        logger.info(
+            f"Published universal TRAIN task for iteration {iteration} via fanout exchange (all clients will receive simultaneously)"
+        )
 
         return StartTrainingResponse(
             success=True,
-            message=f"Training started for {num_clients} clients",
+            message=f"Training started with universal task (all {num_clients} clients will process)",
             iteration=iteration,
         )
     except Exception as e:
@@ -469,7 +487,7 @@ async def get_training_status(
         Training status derived from blockchain
     """
     try:
-        logger.info("Training status requested via API")
+        logger.debug("Training status requested via API")
 
         # Get latest model version from blockchain
         # Use the shared blockchain worker instance from server startup

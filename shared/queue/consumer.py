@@ -1,7 +1,7 @@
 """Generic message consumer for RabbitMQ."""
 
 import json
-from typing import Callable, Optional, Dict, Any
+from typing import Callable, Optional, Dict, Any, Union
 from functools import wraps
 import pika
 from pika.channel import Channel
@@ -19,7 +19,10 @@ def handle_connection_error(func: Callable) -> Callable:
     def wrapper(self, *args, **kwargs):
         try:
             return func(self, *args, **kwargs)
-        except (pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError) as e:
+        except (
+            pika.exceptions.AMQPConnectionError,
+            pika.exceptions.StreamLostError,
+        ) as e:
             logger.error(f"Connection error in {func.__name__}: {str(e)}")
             if self.auto_reconnect:
                 logger.info("Attempting to reconnect...")
@@ -49,6 +52,7 @@ class QueueConsumer:
         self._own_connection = connection is None
         self.auto_reconnect = auto_reconnect
         self._consuming = False
+        self._active_channel: Optional[Channel] = None  # Store channel for stopping
 
     def _ensure_connected(self) -> Channel:
         """Ensure connection is active."""
@@ -118,25 +122,12 @@ class QueueConsumer:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse message: {str(e)}")
             # Reject message and don't requeue (malformed message)
-            channel.basic_nack(
-                delivery_tag=method.delivery_tag, requeue=False
-            )
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
-            # Check if error message indicates task not for this client
-            error_str = str(e).lower()
-            if "task not for this client" in error_str or "not for client" in error_str:
-                logger.debug(f"Task not for this client, requeuing: {str(e)}")
-                # Requeue so another client can pick it up
-                channel.basic_nack(
-                    delivery_tag=method.delivery_tag, requeue=True
-                )
-            else:
-                # Reject message and requeue (temporary error)
-                channel.basic_nack(
-                    delivery_tag=method.delivery_tag, requeue=True
-                )
+            # Reject message and requeue (temporary error)
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
     @handle_connection_error
     def consume_tasks(
@@ -168,7 +159,7 @@ class QueueConsumer:
             # Use fanout exchange - each consumer gets its own queue
             if not consumer_id:
                 raise ValueError("consumer_id is required when use_fanout=True")
-            
+
             fanout_exchange = f"{queue_name}_fanout"
             # Declare fanout exchange
             channel.exchange_declare(
@@ -176,14 +167,16 @@ class QueueConsumer:
                 exchange_type="fanout",
                 durable=durable,
             )
-            
+
             # Create unique queue for this consumer
             consumer_queue = f"{queue_name}_{consumer_id}"
-            self.declare_queue(consumer_queue, durable=durable, exclusive=False, auto_delete=False)
-            
+            self.declare_queue(
+                consumer_queue, durable=durable, exclusive=False, auto_delete=False
+            )
+
             # Bind queue to fanout exchange
             channel.queue_bind(exchange=fanout_exchange, queue=consumer_queue)
-            
+
             logger.info(
                 f"Consuming from fanout exchange {fanout_exchange} via queue {consumer_queue}"
             )
@@ -206,31 +199,63 @@ class QueueConsumer:
         )
 
         self._consuming = True
+        self._active_channel = channel  # Store channel reference for stopping
 
         try:
             # Start consuming (blocking)
+            # This will block until stop_consuming() is called or connection is lost
             channel.start_consuming()
+            # If we get here, consuming stopped normally (not due to exception)
+            logger.debug("Consuming stopped normally")
         except KeyboardInterrupt:
-            logger.info("Stopping consumer...")
-            channel.stop_consuming()
+            logger.info("Stopping consumer (KeyboardInterrupt)...")
+            # Don't try to stop again if already stopped
+            if channel.is_open:
+                try:
+                    channel.stop_consuming()
+                except Exception:
+                    pass  # Already stopped or connection lost
+        except pika.exceptions.StreamLostError as e:
+            # Connection was closed (e.g., by stop() from another thread or network issue)
+            logger.debug(f"Stream connection lost while consuming: {str(e)}")
+            # Don't re-raise - this is expected when stop() is called
+        except pika.exceptions.AMQPConnectionError as e:
+            # Connection error
+            logger.debug(f"AMQP connection error while consuming: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error in consume_tasks: {str(e)}", exc_info=True)
+            raise
+        finally:
+            # Always reset state, even if we exited normally
             self._consuming = False
+            self._active_channel = None
 
     @handle_connection_error
     def consume_dict(
         self,
         queue_name: str,
-        callback: Callable[[Dict[str, Any]], None],
+        callback: Callable[
+            ..., None
+        ],  # Accepts either (message_dict) or (message_dict, channel, delivery_tag)
         durable: bool = True,
         prefetch_count: int = 1,
+        auto_ack: bool = True,
     ) -> None:
         """
         Consume raw dictionary messages from a queue.
 
         Args:
             queue_name: Name of the queue to consume from
-            callback: Function to call for each message (Dict) -> None
+            callback: Function to call for each message.
+                     If auto_ack=False, callback signature should be:
+                     callback(message_dict, channel, delivery_tag)
+                     If auto_ack=True, callback signature is:
+                     callback(message_dict)
             durable: If True, queue is durable
             prefetch_count: Number of unacknowledged messages to prefetch
+            auto_ack: If True, automatically acknowledge messages after callback.
+                     If False, callback must acknowledge manually.
 
         Raises:
             pika.exceptions.AMQPConnectionError: If connection fails
@@ -251,11 +276,15 @@ class QueueConsumer:
         ):
             try:
                 message_dict = json.loads(body)
-                logger.debug(
-                    f"Received message from queue {method.routing_key}"
-                )
-                callback(message_dict)
-                ch.basic_ack(delivery_tag=method.delivery_tag)
+                logger.debug(f"Received message from queue {method.routing_key}")
+                if auto_ack:
+                    callback(message_dict)
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                else:
+                    # Pass channel and delivery_tag to callback for manual ack
+                    # Type checker can't verify this at compile time since callback signature
+                    # depends on auto_ack parameter
+                    callback(message_dict, ch, method.delivery_tag)  # type: ignore[misc]
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse message: {str(e)}")
                 ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
@@ -270,29 +299,82 @@ class QueueConsumer:
         )
 
         self._consuming = True
+        self._active_channel = channel  # Store channel reference for stopping
         logger.info(f"Started consuming from queue: {queue_name}")
 
         try:
             # Start consuming (blocking)
+            # This will block until stop_consuming() is called or connection is lost
             channel.start_consuming()
+            # If we get here, consuming stopped normally (not due to exception)
+            logger.debug("Consuming stopped normally")
         except KeyboardInterrupt:
-            logger.info("Stopping consumer...")
-            channel.stop_consuming()
+            logger.info("Stopping consumer (KeyboardInterrupt)...")
+            # Don't try to stop again if already stopped
+            if channel.is_open:
+                try:
+                    channel.stop_consuming()
+                except Exception:
+                    pass  # Already stopped or connection lost
+        except pika.exceptions.StreamLostError as e:
+            # Connection was closed (e.g., by stop() from another thread or network issue)
+            logger.debug(f"Stream connection lost while consuming: {str(e)}")
+            # Don't re-raise - this is expected when stop() is called
+        except pika.exceptions.AMQPConnectionError as e:
+            # Connection error
+            logger.debug(f"AMQP connection error while consuming: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error in consume_dict: {str(e)}", exc_info=True)
+            raise
+        finally:
+            # Always reset state, even if we exited normally
             self._consuming = False
+            self._active_channel = None
 
     def stop(self):
         """Stop consuming messages."""
-        if self._consuming:
-            channel = self._ensure_connected()
-            channel.stop_consuming()
-            self._consuming = False
-            logger.info("Stopped consuming")
+        if not self._consuming:
+            # Already stopped, nothing to do
+            return
+
+        # Use the stored channel reference if available
+        if self._active_channel is not None:
+            try:
+                # Check if channel is still open before stopping
+                if self._active_channel.is_open:
+                    self._active_channel.stop_consuming()
+                    logger.debug("Stopped consuming on active channel")
+            except pika.exceptions.StreamLostError:
+                # Connection already lost, that's okay
+                logger.debug("Connection already lost when stopping")
+            except Exception as e:
+                logger.debug(f"Error stopping channel: {str(e)}")
+        else:
+            # No active channel, try to get one and stop it (fallback)
+            try:
+                if self.connection.is_connected():
+                    channel = self.connection.channel
+                    if channel and channel.is_open:
+                        channel.stop_consuming()
+                        logger.debug("Stopped consuming on fallback channel")
+            except Exception as e:
+                logger.debug(f"Error stopping consumer (fallback): {str(e)}")
+
+        self._consuming = False
+        self._active_channel = None
+        logger.info("Stopped consuming")
 
     def close(self):
         """Close connection if we own it."""
+        # Stop consuming first (idempotent)
         self.stop()
-        if self._own_connection:
-            self.connection.close()
+        # Only close connection if we own it
+        if self._own_connection and self.connection:
+            try:
+                self.connection.close()
+            except Exception as e:
+                logger.debug(f"Error closing connection: {str(e)}")
 
     def __enter__(self):
         """Context manager entry."""
@@ -302,4 +384,3 @@ class QueueConsumer:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.close()
-
