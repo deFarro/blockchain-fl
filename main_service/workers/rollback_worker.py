@@ -12,7 +12,7 @@ from shared.models.task import (
     RollbackTaskPayload,
 )
 from main_service.blockchain.fabric_client import FabricClient
-from main_service.storage.ipfs_client import IPFSClient
+from shared.storage.ipfs_client import IPFSClient
 from shared.logger import setup_logger
 
 logger = setup_logger(__name__)

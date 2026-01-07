@@ -145,6 +145,8 @@ class QueueConsumer:
         callback: Callable[[Task], None],
         durable: bool = True,
         prefetch_count: int = 1,
+        use_fanout: bool = False,
+        consumer_id: Optional[str] = None,
     ) -> None:
         """
         Consume tasks from a queue.
@@ -154,28 +156,56 @@ class QueueConsumer:
             callback: Function to call for each task (Task) -> None
             durable: If True, queue is durable
             prefetch_count: Number of unacknowledged messages to prefetch
+            use_fanout: If True, consume from fanout exchange (each consumer gets own queue)
+            consumer_id: Unique ID for this consumer (required if use_fanout=True)
 
         Raises:
             pika.exceptions.AMQPConnectionError: If connection fails
         """
         channel = self._ensure_connected()
 
-        # Declare queue
-        self.declare_queue(queue_name, durable=durable)
+        if use_fanout:
+            # Use fanout exchange - each consumer gets its own queue
+            if not consumer_id:
+                raise ValueError("consumer_id is required when use_fanout=True")
+            
+            fanout_exchange = f"{queue_name}_fanout"
+            # Declare fanout exchange
+            channel.exchange_declare(
+                exchange=fanout_exchange,
+                exchange_type="fanout",
+                durable=durable,
+            )
+            
+            # Create unique queue for this consumer
+            consumer_queue = f"{queue_name}_{consumer_id}"
+            self.declare_queue(consumer_queue, durable=durable, exclusive=False, auto_delete=False)
+            
+            # Bind queue to fanout exchange
+            channel.queue_bind(exchange=fanout_exchange, queue=consumer_queue)
+            
+            logger.info(
+                f"Consuming from fanout exchange {fanout_exchange} via queue {consumer_queue}"
+            )
+            actual_queue = consumer_queue
+        else:
+            # Use direct queue
+            self.declare_queue(queue_name, durable=durable)
+            actual_queue = queue_name
+            logger.info(f"Started consuming from queue: {queue_name}")
 
         # Set QoS to limit unacknowledged messages
         channel.basic_qos(prefetch_count=prefetch_count)
 
         # Set up consumer
         channel.basic_consume(
-            queue=queue_name,
+            queue=actual_queue,
             on_message_callback=lambda ch, method, props, body: self._on_message(
                 ch, method, props, body, callback
             ),
         )
 
         self._consuming = True
-        logger.info(f"Started consuming from queue: {queue_name}")
 
         try:
             # Start consuming (blocking)

@@ -18,6 +18,8 @@ sys.path.insert(0, str(project_root))
 if "RABBITMQ_HOST" not in os.environ:
     os.environ["RABBITMQ_HOST"] = "localhost"
 
+import pytest
+import pika
 from shared.queue.connection import QueueConnection
 from shared.queue.publisher import QueuePublisher
 from shared.queue.consumer import QueueConsumer
@@ -60,6 +62,14 @@ def test_publish_subscribe():
 
     try:
         # Test 1: Publish messages first
+        # Check if RabbitMQ is available, skip test if not
+        try:
+            connection = QueueConnection()
+            connection.connect()
+            connection.close()
+        except (pika.exceptions.AMQPConnectionError, ConnectionRefusedError, OSError) as e:
+            pytest.skip(f"RabbitMQ is not available: {e}. Start RabbitMQ with: docker-compose up -d rabbitmq")
+        
         with QueuePublisher() as publisher:
             publisher.publish_task(test_task, test_queue)
             print(f"✓ Published task 1 to queue: {test_queue}")

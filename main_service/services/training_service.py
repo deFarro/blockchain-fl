@@ -4,7 +4,7 @@ import json
 from typing import Dict, Any
 from shared.models.model import SimpleCNN
 from shared.storage.encryption import EncryptionService
-from main_service.storage.ipfs_client import IPFSClient
+from shared.storage.ipfs_client import IPFSClient
 from shared.logger import setup_logger
 
 logger = setup_logger(__name__)

@@ -105,6 +105,9 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_USER:-admin}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin}
+      - IPFS_HOST=ipfs
+      - IPFS_PORT=5001
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}  # Base64-encoded 32-byte key (required for decrypting weights)
       - NUM_CLIENTS=${NUM_CLIENTS:-2}  # Total number of client replicas
       - SPLIT_TYPE=${SPLIT_TYPE:-iid}  # iid or non_iid
       - DATASET_SEED=${DATASET_SEED:-42}  # Seed for dataset splitting

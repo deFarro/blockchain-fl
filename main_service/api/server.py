@@ -1,6 +1,8 @@
 """FastAPI server for main service API."""
 
 import threading
+import time
+import uvicorn
 from pathlib import Path
 from typing import Dict, Any, List
 from fastapi import FastAPI
@@ -8,7 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from shared.logger import setup_logger
+from shared.config import settings
 from main_service.api import routes
+from main_service.workers.aggregation_worker import AggregationWorker
+from main_service.workers.decision_worker import DecisionWorker
+from main_service.workers.validation_worker import ValidationWorker
+from main_service.workers.blockchain_worker import BlockchainWorker
+from main_service.workers.storage_worker import StorageWorker
+from main_service.workers.rollback_worker import RollbackWorker
 
 logger = setup_logger(__name__)
 
@@ -59,12 +68,6 @@ async def startup_event():
 
     # Start all workers in background threads
     try:
-        from main_service.workers.aggregation_worker import AggregationWorker
-        from main_service.workers.decision_worker import DecisionWorker
-        from main_service.workers.validation_worker import ValidationWorker
-        from main_service.workers.blockchain_worker import BlockchainWorker
-        from main_service.workers.storage_worker import StorageWorker
-        from main_service.workers.rollback_worker import RollbackWorker
 
         def start_worker_in_thread(worker_name: str, worker_instance, queue_name: str):
             """Start a worker in a background thread."""
@@ -109,8 +112,6 @@ async def startup_event():
         # For now, we'll process iteration 1, then 2, etc. as they become available
         def aggregation_worker_thread():
             """Continuously process client updates and aggregate them by iteration."""
-            import time
-
             try:
                 logger.info(
                     "Starting aggregation worker thread (will process iterations as updates arrive)"
@@ -215,9 +216,6 @@ async def shutdown_event():
 
 
 if __name__ == "__main__":
-    import uvicorn
-    from shared.config import settings
-
     port = getattr(settings, "api_port", 8000)
     host = getattr(settings, "api_host", "0.0.0.0")
 

@@ -118,6 +118,12 @@ type HealthResponse struct {
 	Status string `json:"status"`
 }
 
+// ListModelsResponse represents the response for listing all models
+type ListModelsResponse struct {
+	Versions []GetProvenanceResponse `json:"versions"`
+	Total    int                     `json:"total"`
+}
+
 func (bs *BlockchainService) registerModelUpdate(w http.ResponseWriter, r *http.Request) {
 	var req RegisterModelUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -319,6 +325,38 @@ func (bs *BlockchainService) getProvenance(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(response)
 }
 
+func (bs *BlockchainService) listModels(w http.ResponseWriter, r *http.Request) {
+	var versions []GetProvenanceResponse
+
+	if bs.useFabric && bs.fabricClient != nil {
+		// Use Fabric SDK - would query all states here
+		// For now, fall back to in-memory storage
+		log.Printf("Fabric list models not implemented, falling back to in-memory storage")
+		bs.useFabric = false
+	}
+
+	if !bs.useFabric {
+		// Fallback to in-memory storage
+		for _, version := range bs.records {
+			versions = append(versions, GetProvenanceResponse{
+				VersionID:      version.VersionID,
+				ParentVersionID: version.ParentVersionID,
+				Hash:           version.Hash,
+				Metadata:       version.Metadata,
+				Timestamp:      version.Timestamp,
+			})
+		}
+	}
+
+	response := ListModelsResponse{
+		Versions: versions,
+		Total:    len(versions),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func (bs *BlockchainService) health(w http.ResponseWriter, r *http.Request) {
 	response := HealthResponse{
 		Status: "healthy",
@@ -348,6 +386,7 @@ func main() {
 	r.HandleFunc("/api/v1/model/validate", service.recordValidation).Methods("POST")
 	r.HandleFunc("/api/v1/model/rollback", service.rollbackModel).Methods("POST")
 	r.HandleFunc("/api/v1/model/provenance/{version_id}", service.getProvenance).Methods("GET")
+	r.HandleFunc("/api/v1/model/list", service.listModels).Methods("GET")
 
 	log.Printf("Blockchain service starting on port %s", port)
 	if service.useFabric {

@@ -5,6 +5,7 @@ import json
 import time
 from typing import Optional, Dict, Any, cast
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from shared.queue.consumer import QueueConsumer
 from shared.queue.publisher import QueuePublisher
@@ -17,7 +18,7 @@ from shared.models.task import (
     DecisionTaskPayload,
 )
 from shared.storage.encryption import EncryptionService
-from main_service.storage.ipfs_client import IPFSClient
+from shared.storage.ipfs_client import IPFSClient
 from main_service.blockchain.fabric_client import FabricClient
 from shared.datasets import get_dataset, DatasetInterface
 from shared.models.model import SimpleCNN
@@ -139,7 +140,6 @@ class ValidationWorker:
         correct = 0
         total = 0
         total_loss = 0.0
-        import torch.nn.functional as F
 
         with torch.no_grad():
             for data, target in test_loader:

@@ -13,7 +13,10 @@ sys.path.insert(0, str(project_root))
 if "RABBITMQ_HOST" not in os.environ:
     os.environ["RABBITMQ_HOST"] = "localhost"
 
+import pytest
+import pika
 import torch
+from unittest.mock import Mock, patch
 from shared.queue.publisher import QueuePublisher
 from shared.models.task import Task, TaskType, TrainTaskPayload, TaskMetadata
 from client_service.worker import ClientWorker
@@ -49,11 +52,11 @@ def test_worker_train_task():
     print(f"Client ID: {test_task.payload['client_id']}")
     print()
 
-    # Publish task to queue
-    print("Publishing task to queue 'train_tasks'...")
-    with QueuePublisher() as publisher:
-        publisher.publish_task(test_task, "train_tasks")
-        print("✓ Task published")
+    # Note: We don't actually need to publish to RabbitMQ for this test
+    # since we're calling _handle_train_task directly
+    # But if we want to test publishing, we need RabbitMQ
+    # For now, skip publishing and test worker directly
+    print("Note: Testing worker directly (not publishing to queue)")
     print()
 
     # Create worker with trainer using 1 epoch for faster testing
@@ -61,9 +64,18 @@ def test_worker_train_task():
     trainer = Trainer(epochs=1)  # Use 1 epoch for faster testing
     worker = ClientWorker(trainer=trainer)
 
+    # Mock the publisher to avoid RabbitMQ connection
+    # The worker will try to publish client updates, but we don't need RabbitMQ for this test
+    mock_publisher = Mock()
+    mock_publisher.publish_dict = Mock(return_value=None)
+    worker.publisher = mock_publisher
+
     # Process task directly (for testing, not using consume loop)
     print("Processing task...")
     success = worker._handle_train_task(test_task)
+    
+    # Verify that publish_dict was called (worker tried to publish the update)
+    assert mock_publisher.publish_dict.called, "Worker should attempt to publish client update"
 
     assert success, "Task processing should succeed"
     print("✓ Task processed successfully")

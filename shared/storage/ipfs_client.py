@@ -1,6 +1,8 @@
 """Async IPFS client using httpx."""
 
 import json
+import os
+import sys
 from typing import Optional, Dict, Any, Union, List
 import httpx
 from shared.config import settings
@@ -56,7 +58,15 @@ class IPFSClient:
 
     async def __aenter__(self):
         """Async context manager entry."""
-        self.client = httpx.AsyncClient(base_url=self.base_url, timeout=30.0)
+        # Disable progress bars and verbose output
+        # Suppress progress output by redirecting stdout/stderr temporarily if needed
+        # httpx doesn't show progress by default, but IPFS might
+        # We'll use follow_redirects and disable any progress callbacks
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=30.0,
+            follow_redirects=True,
+        )
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -180,9 +190,14 @@ class IPFSClient:
 
         url = f"/api/v0/cat?arg={cid}"
         try:
-            response = await self.client.post(url)
-            response.raise_for_status()
-            content: bytes = response.content
+            # Use streaming to read content without progress bars
+            # Read all content at once to avoid any progress indicators
+            async with self.client.stream("POST", url) as response:
+                response.raise_for_status()
+                # Read all content without showing progress
+                content = b""
+                async for chunk in response.aiter_bytes():
+                    content += chunk
             return content
         except httpx.HTTPError as e:
             logger.error(f"Failed to retrieve CID {cid}: {str(e)}")

@@ -189,6 +189,24 @@ class FabricClient:
             logger.error(f"Failed to get provenance: {str(e)}")
             raise
 
+    async def list_models(self) -> Dict[str, Any]:
+        """
+        List all model versions from blockchain.
+
+        Returns:
+            Dictionary with 'versions' list and 'total' count
+        """
+        if not self.client:
+            raise RuntimeError("FabricClient must be used as async context manager")
+
+        try:
+            response = await self.client.get("/api/v1/model/list")
+            response.raise_for_status()
+            return _parse_json_response(response)
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to list models: {str(e)}")
+            raise
+
     async def health_check(self) -> bool:
         """
         Check if blockchain service is healthy.

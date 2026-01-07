@@ -296,7 +296,7 @@ async def test_storage_worker_ipfs_integration():
 
     try:
         from client_service.training.model import SimpleCNN
-        from main_service.storage.ipfs_client import IPFSClient
+        from shared.storage.ipfs_client import IPFSClient
 
         # Create model and get weights
         model = SimpleCNN(num_classes=10)

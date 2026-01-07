@@ -1,9 +1,11 @@
 """Shared configuration management."""
 
+import base64
 from pathlib import Path
 from typing import Optional, List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
+from shared.utils.crypto import AES256GCM
 
 # Load environment variables from .env file
 load_dotenv()
@@ -93,9 +95,6 @@ class Settings(BaseSettings):
         Raises:
             ValueError: If ENCRYPTION_KEY is not set or invalid
         """
-        import base64
-        from shared.utils.crypto import AES256GCM
-
         if not self.encryption_key:
             raise ValueError(
                 "ENCRYPTION_KEY environment variable is required. "

@@ -60,6 +60,7 @@ class QueuePublisher:
         routing_key: Optional[str] = None,
         exchange: str = "",
         durable: bool = True,
+        use_fanout: bool = False,
     ) -> None:
         """
         Publish a Task to a queue.
@@ -70,35 +71,60 @@ class QueuePublisher:
             routing_key: Routing key (defaults to queue_name)
             exchange: Exchange name (default: "" for default exchange)
             durable: If True, queue is durable
+            use_fanout: If True, use fanout exchange to broadcast to all consumers
 
         Raises:
             pika.exceptions.AMQPConnectionError: If connection fails
         """
         channel = self._ensure_connected()
 
-        # Declare queue if not already declared
-        self.declare_queue(queue_name, durable=durable)
-
         # Convert task to dictionary
         message_body = task.to_dict()
 
-        # Use routing_key if provided, otherwise use queue_name
-        routing = routing_key or queue_name
+        if use_fanout:
+            # Use fanout exchange to broadcast to all consumers
+            # Each consumer will have its own queue bound to this exchange
+            fanout_exchange = f"{queue_name}_fanout"
+            channel.exchange_declare(
+                exchange=fanout_exchange,
+                exchange_type="fanout",
+                durable=durable,
+            )
+            # Publish to fanout exchange (routing_key is ignored for fanout)
+            channel.basic_publish(
+                exchange=fanout_exchange,
+                routing_key="",  # Fanout ignores routing key
+                body=json.dumps(message_body),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # Make message persistent
+                    content_type="application/json",
+                ),
+            )
+            logger.info(
+                f"Published task {task.task_id} (type: {task.task_type}) to fanout exchange {fanout_exchange}"
+            )
+        else:
+            # Use default exchange (direct routing to queue)
+            # Declare queue if not already declared
+            self.declare_queue(queue_name, durable=durable)
 
-        # Publish message
-        channel.basic_publish(
-            exchange=exchange,
-            routing_key=routing,
-            body=json.dumps(message_body),
-            properties=pika.BasicProperties(
-                delivery_mode=2,  # Make message persistent
-                content_type="application/json",
-            ),
-        )
+            # Use routing_key if provided, otherwise use queue_name
+            routing = routing_key or queue_name
 
-        logger.info(
-            f"Published task {task.task_id} (type: {task.task_type}) to queue {queue_name}"
-        )
+            # Publish message
+            channel.basic_publish(
+                exchange=exchange,
+                routing_key=routing,
+                body=json.dumps(message_body),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # Make message persistent
+                    content_type="application/json",
+                ),
+            )
+
+            logger.info(
+                f"Published task {task.task_id} (type: {task.task_type}) to queue {queue_name}"
+            )
 
     def publish_dict(
         self,

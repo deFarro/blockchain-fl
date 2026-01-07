@@ -10,7 +10,7 @@ from shared.queue.publisher import QueuePublisher
 from shared.queue.consumer import QueueConsumer
 from shared.models.task import Task, TaskType, TaskMetadata
 from shared.storage.encryption import EncryptionService
-from main_service.storage.ipfs_client import IPFSClient
+from shared.storage.ipfs_client import IPFSClient
 from main_service.workers.aggregation_worker import AggregationWorker
 from main_service.workers.blockchain_worker import BlockchainWorker
 from main_service.workers.storage_worker import StorageWorker

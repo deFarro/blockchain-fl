@@ -1,6 +1,9 @@
 """Client service worker that consumes training tasks and publishes updates."""
 
+import asyncio
 import json
+import os
+import sys
 from typing import Optional, Dict, Any
 from client_service.config import config
 from client_service.training.trainer import Trainer
@@ -8,7 +11,10 @@ from client_service.training.model import SimpleCNN
 from shared.queue.consumer import QueueConsumer
 from shared.queue.publisher import QueuePublisher
 from shared.queue.connection import QueueConnection
-from shared.models.task import Task, TaskType, TrainTaskPayload
+from shared.models.task import Task, TaskType, TrainTaskPayload, RollbackTaskPayload
+from shared.storage.ipfs_client import IPFSClient
+from shared.storage.encryption import EncryptionService
+from shared.config import settings
 from shared.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -59,13 +65,67 @@ class ClientWorker:
         if weights_cid is None:
             return None
 
-        # TODO: Implement IPFS client to fetch weights
-        # For now, return None (will train from scratch)
-        logger.warning(
-            f"Weights CID provided ({weights_cid}) but IPFS client not implemented yet. "
-            "Training from scratch."
-        )
-        return None
+        try:
+            logger.info(f"Loading weights from IPFS CID: {weights_cid}")
+
+            # Suppress progress output during IPFS download
+            # Redirect stdout/stderr to suppress progress bars
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+
+            try:
+                # Redirect to devnull to suppress progress bars
+                devnull = open(os.devnull, "w")
+                sys.stdout = devnull
+                sys.stderr = devnull
+
+                # Retrieve encrypted weights from IPFS
+                async def fetch_and_decrypt():
+                    async with IPFSClient() as ipfs_client:
+                        encrypted_weights = await ipfs_client.get_bytes(weights_cid)
+                        logger.debug(
+                            f"Retrieved {len(encrypted_weights)} bytes from IPFS"
+                        )
+
+                    # Decrypt weights
+                    encryption_service = EncryptionService()
+                    decrypted_weights = encryption_service.decrypt_diff(
+                        encrypted_weights
+                    )
+                    logger.debug(f"Decrypted {len(decrypted_weights)} bytes")
+
+                    # Deserialize weights
+                    weights_json = decrypted_weights.decode("utf-8")
+                    weights_dict = json.loads(weights_json)
+                    return weights_dict
+
+                # Run async function
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    # No event loop in current thread, create new one
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                weights_dict: Dict[str, Any] = loop.run_until_complete(
+                    fetch_and_decrypt()
+                )
+            finally:
+                # Restore stdout/stderr
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+                if "devnull" in locals():
+                    devnull.close()
+
+            logger.info(f"Successfully loaded weights from IPFS CID: {weights_cid}")
+            return weights_dict
+
+        except Exception as e:
+            logger.error(
+                f"Failed to load weights from IPFS CID {weights_cid}: {str(e)}",
+                exc_info=True,
+            )
+            logger.warning("Training from scratch due to IPFS retrieval failure")
+            return None
 
     def _handle_train_task(self, task: Task) -> bool:
         """
@@ -95,10 +155,11 @@ class ClientWorker:
                 if task_client_id_num != self.client_id:
                     logger.debug(
                         f"Task {task.task_id} is for client {task_client_id_num}, "
-                        f"but this is client {self.client_id}. Requeuing for correct client."
+                        f"but this is client {self.client_id}. Will be requeued for correct client."
                     )
                     # Raise exception to trigger requeueing
-                    # The consumer will catch this and requeue the message
+                    # With higher prefetch_count, other clients can process their messages
+                    # while this client holds messages not meant for it
                     raise TaskNotForThisClient(
                         f"Task {task.task_id} is for client {task_client_id_num}, "
                         f"not client {self.client_id}"
@@ -176,8 +237,6 @@ class ClientWorker:
             logger.info(f"Processing ROLLBACK task: {task.task_id}")
 
             # Parse payload
-            from shared.models.task import RollbackTaskPayload
-
             payload = RollbackTaskPayload(**task.payload)
 
             # Load weights from the target version
@@ -252,9 +311,21 @@ class ClientWorker:
                 )
 
         try:
-            # Start consuming
-            logger.info(f"Consuming tasks from queue: {queue_name}")
-            self.consumer.consume_tasks(queue_name, task_handler)
+            # Start consuming from single queue
+            # All clients consume from the same queue, but only process messages for their client_id
+            # Use higher prefetch_count to allow clients to hold multiple messages,
+            # preventing one client from monopolizing the queue
+            num_clients = getattr(settings, "num_clients", 2)
+            prefetch_count = max(
+                num_clients, 5
+            )  # At least as many as clients, minimum 5
+
+            logger.info(
+                f"Consuming tasks from queue: {queue_name} (prefetch_count={prefetch_count})"
+            )
+            self.consumer.consume_tasks(
+                queue_name, task_handler, prefetch_count=prefetch_count
+            )
         except KeyboardInterrupt:
             logger.info("Received interrupt signal. Stopping worker...")
             self.stop()

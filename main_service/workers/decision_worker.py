@@ -227,7 +227,7 @@ class DecisionWorker:
             )
 
             self.publisher.publish_task(task=train_task, queue_name="train_queue")
-            logger.debug(f"Published TRAIN task for client_{client_id}")
+            logger.debug(f"Published TRAIN task for client_{client_id} (via fanout)")
 
         logger.info(
             f"✓ Published {self.num_clients} TRAIN tasks for iteration {iteration}"

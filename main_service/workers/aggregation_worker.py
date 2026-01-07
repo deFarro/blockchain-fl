@@ -11,7 +11,7 @@ from shared.config import settings
 from shared.queue.consumer import QueueConsumer
 from shared.queue.publisher import QueuePublisher
 from shared.queue.connection import QueueConnection
-from shared.models.task import Task, TaskType, AggregateTaskPayload
+from shared.models.task import Task, TaskType, TaskMetadata, AggregateTaskPayload
 from shared.logger import setup_logger
 from shared.monitoring.metrics import get_metrics_collector
 from shared.models.model import SimpleCNN
@@ -442,8 +442,6 @@ class AggregationWorker:
             aggregated_data: Aggregated data containing diff, iteration, etc.
         """
         # Create AGGREGATE task
-        from shared.models.task import TaskMetadata
-
         # Create task for blockchain worker
         # The blockchain worker will:
         # 1. Compute hash of aggregated_diff

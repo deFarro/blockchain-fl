@@ -1,5 +1,6 @@
 """Metrics collection and monitoring utilities."""
 
+import asyncio
 import time
 from typing import Dict, Any, Optional
 from functools import wraps
@@ -167,8 +168,6 @@ def timed_operation(operation_name: str):
                     },
                 )
                 raise
-
-        import asyncio
 
         if asyncio.iscoroutinefunction(func):
             return async_wrapper

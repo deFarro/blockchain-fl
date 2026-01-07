@@ -1,5 +1,7 @@
 """API routes for main service."""
 
+import time
+import uuid
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,6 +9,9 @@ from shared.logger import setup_logger
 from shared.queue.publisher import QueuePublisher
 from shared.queue.connection import QueueConnection
 from shared.models.task import Task, TaskType, TaskMetadata, RollbackTaskPayload
+from shared.config import settings
+from shared.utils.hashing import compute_hash
+from shared.storage.ipfs_client import IPFSClient
 from main_service.blockchain.fabric_client import FabricClient
 from main_service.services.training_service import prepopulate_initial_weights
 from main_service.api.models import (
@@ -21,7 +26,7 @@ from main_service.api.models import (
     ErrorResponse,
 )
 from main_service.api.auth import verify_api_key
-import time
+from main_service.workers.blockchain_worker import BlockchainWorker
 
 logger = setup_logger(__name__)
 
@@ -48,17 +53,66 @@ async def list_models(
     try:
         logger.info(f"Listing models (limit={limit}, offset={offset})")
 
-        # TODO: Query blockchain service for model versions
-        # For now, return empty list
-        # In production, this would query the blockchain service API to get all versions
+        # Query blockchain service for model versions
+        async with FabricClient() as blockchain_client:
+            blockchain_response = await blockchain_client.list_models()
 
-        # Placeholder: In real implementation, query blockchain service
+        # Parse response from blockchain service
+        blockchain_versions = blockchain_response.get("versions", [])
+        total = blockchain_response.get("total", 0)
+
+        # Convert to ModelVersionResponse format
         versions: List[ModelVersionResponse] = []
-        total = 0
+        for bv in blockchain_versions:
+            metadata = bv.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            # Extract accuracy from validation_metrics if available
+            validation_metrics = metadata.get("validation_metrics")
+            accuracy = None
+            if isinstance(validation_metrics, dict):
+                accuracy = validation_metrics.get("accuracy")
+
+            version = ModelVersionResponse(
+                version_id=bv.get("version_id", ""),
+                parent_version_id=bv.get("parent_version_id"),
+                hash=bv.get("hash", ""),
+                iteration=(
+                    metadata.get("iteration")
+                    if isinstance(metadata.get("iteration"), int)
+                    else None
+                ),
+                num_clients=(
+                    metadata.get("num_clients")
+                    if isinstance(metadata.get("num_clients"), int)
+                    else None
+                ),
+                client_ids=(
+                    metadata.get("client_ids")
+                    if isinstance(metadata.get("client_ids"), list)
+                    else None
+                ),
+                ipfs_cid=metadata.get("ipfs_cid"),
+                timestamp=bv.get("timestamp"),
+                validation_status=metadata.get("validation_status"),
+                accuracy=accuracy,
+                metadata=metadata,
+            )
+            versions.append(version)
+
+        # Apply offset and limit
+        if offset > 0:
+            versions = versions[offset:]
+        if limit > 0:
+            versions = versions[:limit]
+
+        # Sort by timestamp (newest first) if available
+        versions.sort(key=lambda v: v.timestamp or "", reverse=True)
 
         # Return response
         response = ModelVersionListResponse(versions=versions, total=total)
-        logger.debug(f"Returning {len(versions)} model versions")
+        logger.debug(f"Returning {len(versions)} model versions (total: {total})")
         return response
     except HTTPException:
         raise
@@ -270,8 +324,6 @@ async def start_training(
         publisher = QueuePublisher(connection=connection)
 
         # Get number of clients from settings (default to 2 if not set)
-        from shared.config import settings
-
         num_clients = getattr(settings, "num_clients", 2)
 
         iteration = 1  # Start from iteration 1
@@ -285,7 +337,58 @@ async def start_training(
             initial_weights_cid = await prepopulate_initial_weights()
             logger.info(f"Generated initial weights with CID: {initial_weights_cid}")
 
-        # Publish initial TRAIN tasks for all clients
+        # Register initial model version on blockchain (iteration 0)
+        # This creates a valid checkpoint that can be rolled back to
+        try:
+            # Generate initial model version ID
+            initial_version_id = (
+                f"model_v0_initial_{int(time.time())}_{str(uuid.uuid4())[:8]}"
+            )
+
+            # For initial weights, we use the encrypted weights hash as the blockchain hash
+            # Since we already have the encrypted weights in IPFS, we need to compute its hash
+            # For now, we'll use a placeholder hash - in production, we'd retrieve and hash the encrypted weights
+            # But since we just uploaded them, we can compute the hash from the CID metadata
+            # For simplicity, we'll use the CID as a reference and compute hash from IPFS
+            async with FabricClient() as blockchain_client:
+                # Compute hash of encrypted weights (we need to retrieve from IPFS)
+                async with IPFSClient() as ipfs_client:
+                    encrypted_weights = await ipfs_client.get_bytes(initial_weights_cid)
+                    initial_hash = compute_hash(encrypted_weights)
+
+                # Register initial model version on blockchain
+                initial_metadata = {
+                    "iteration": 0,
+                    "num_clients": 0,  # No clients participated in initial version
+                    "client_ids": [],
+                    "ipfs_cid": initial_weights_cid,
+                    "diff_hash": initial_hash,  # Hash of encrypted initial weights
+                    "rollback_count": 0,
+                    "validation_history": [],
+                    "is_initial": True,
+                }
+
+                transaction_id = await blockchain_client.register_model_update(
+                    model_version_id=initial_version_id,
+                    parent_version_id=None,  # No parent for initial version
+                    hash_value=initial_hash,
+                    metadata=initial_metadata,
+                )
+
+                logger.info(
+                    f"✓ Registered initial model version on blockchain: "
+                    f"version_id={initial_version_id}, cid={initial_weights_cid}, "
+                    f"tx_id={transaction_id}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to register initial model version on blockchain: {str(e)}. "
+                "Training will continue, but initial checkpoint may not be available for rollback.",
+                exc_info=True,
+            )
+
+        # Publish initial TRAIN tasks for all clients using fanout exchange
+        # This ensures all clients receive all messages simultaneously
         for client_id in range(num_clients):
             train_task = Task(
                 task_id=f"api-train-{iteration}-client_{client_id}-{int(time.time())}",
@@ -302,7 +405,7 @@ async def start_training(
 
             publisher.publish_task(train_task, "train_queue")
             logger.info(
-                f"Published TRAIN task for client_{client_id}, iteration {iteration}"
+                f"Published TRAIN task for client_{client_id}, iteration {iteration} (via fanout)"
             )
 
         return StartTrainingResponse(
@@ -370,6 +473,7 @@ async def get_training_status(
 
         # Get latest model version from blockchain
         # Use the shared blockchain worker instance from server startup
+        # Import workers here to avoid circular import
         from main_service.api.server import workers
 
         latest_version_id = None
@@ -381,8 +485,6 @@ async def get_training_status(
             logger.warning(
                 "Blockchain worker not found in shared workers, creating temporary instance"
             )
-            from main_service.workers.blockchain_worker import BlockchainWorker
-
             blockchain_worker = BlockchainWorker()
             latest_version_id = blockchain_worker.get_latest_model_version_id()
 

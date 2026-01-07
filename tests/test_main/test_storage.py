@@ -22,7 +22,7 @@ from shared.storage.encryption import (
     encrypt_diff,
     decrypt_diff,
 )
-from main_service.storage.ipfs_client import IPFSClient, add_to_ipfs, get_from_ipfs
+from shared.storage.ipfs_client import IPFSClient, add_to_ipfs, get_from_ipfs
 from shared.utils.crypto import AES256GCM, CryptoError
 from shared.config import settings
 

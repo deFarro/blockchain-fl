@@ -1,7 +1,9 @@
 """Regression diagnosis to identify problematic clients."""
 
+import json
 from typing import Dict, Any, List, Optional, Tuple
 import torch
+import torch.nn.functional as F
 from shared.logger import setup_logger
 from shared.models.model import SimpleCNN
 from shared.config import settings
@@ -49,7 +51,6 @@ class RegressionDiagnosis:
         correct = 0
         total = 0
         total_loss = 0.0
-        import torch.nn.functional as F
 
         with torch.no_grad():
             for data, target in test_loader:
@@ -104,8 +105,6 @@ class RegressionDiagnosis:
                 continue
 
             # Deserialize diff
-            import json
-
             try:
                 diff_dict = json.loads(weight_diff_str)
                 client_diff = {}

@@ -15,7 +15,7 @@ from shared.models.task import (
     ValidateTaskPayload,
 )
 from shared.storage.encryption import EncryptionService
-from main_service.storage.ipfs_client import IPFSClient
+from shared.storage.ipfs_client import IPFSClient
 from shared.utils.hashing import compute_hash, verify_hash
 from shared.logger import setup_logger
 from shared.monitoring.metrics import get_metrics_collector
