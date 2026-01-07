@@ -14,7 +14,7 @@ from shared.queue.connection import QueueConnection
 from shared.models.task import Task, TaskType, AggregateTaskPayload
 from shared.logger import setup_logger
 from shared.monitoring.metrics import get_metrics_collector
-from client_service.training.model import SimpleCNN
+from shared.models.model import SimpleCNN
 
 logger = setup_logger(__name__)
 
@@ -185,13 +185,29 @@ class AggregationWorker:
 
         logger.info(
             f"Collecting client updates for iteration {iteration} "
-            f"(min_clients={min_clients}, timeout={timeout}s)"
+            f"(min_clients={min_clients}, updates_collected={len(updates)}, timeout={timeout}s)"
         )
 
         def message_handler(message: Dict[str, Any]):
             """Handle received client update message."""
             msg_iteration = message.get("iteration")
             client_id = message.get("client_id", "unknown")
+
+            # Ensure both are integers for comparison
+            try:
+                msg_iteration = (
+                    int(msg_iteration) if msg_iteration is not None else None
+                )
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"Invalid iteration in message from {client_id}: {msg_iteration}"
+                )
+                msg_iteration = None
+
+            logger.debug(
+                f"Processing message from {client_id}: iteration={msg_iteration}, "
+                f"target_iteration={iteration}, match={msg_iteration == iteration}"
+            )
 
             if msg_iteration == iteration:
                 # This is the iteration we're collecting for
@@ -236,22 +252,48 @@ class AggregationWorker:
 
         def consume_messages():
             """Consume messages in a separate thread and put them in a queue."""
+            # Create a NEW connection and consumer for this collection call
+            # This avoids reentrancy issues when multiple collections happen concurrently
+            collection_connection = QueueConnection()
+            collection_consumer = QueueConsumer(connection=collection_connection)
+
             try:
 
                 def queue_handler(message: Dict[str, Any]):
                     """Handler that puts messages in thread-safe queue."""
+                    # Check if we should stop
+                    if stop_flag.is_set():
+                        logger.debug("Stop flag set, ignoring message")
+                        return
+
+                    msg_iteration = message.get("iteration")
+                    client_id = message.get("client_id", "unknown")
+                    logger.debug(
+                        f"Received message from queue: client={client_id}, iteration={msg_iteration}"
+                    )
+
                     try:
                         message_queue.put(message, timeout=1.0)
+                        logger.debug(f"Message queued successfully from {client_id}")
                     except thread_queue.Full:
-                        logger.warning("Message queue full, dropping message")
+                        logger.warning(
+                            f"Message queue full, dropping message from {client_id}"
+                        )
 
                 # Consume messages (blocking call)
-                self.consumer.consume_dicts(queue_name, queue_handler)
+                # This will block until stop_flag is set or connection is closed
+                collection_consumer.consume_dict(queue_name, queue_handler)
             except Exception as e:
                 error_occurred.set()
                 error_info.append(e)
                 logger.error(f"Error in consumer thread: {str(e)}", exc_info=True)
             finally:
+                # Clean up the collection-specific connection
+                try:
+                    collection_consumer.stop()
+                    collection_connection.close()
+                except Exception as e:
+                    logger.debug(f"Error closing collection connection: {str(e)}")
                 stop_flag.set()  # Signal that consumption has stopped
 
         # Start consumer in a non-daemon thread (so it can be properly joined)
@@ -321,9 +363,9 @@ class AggregationWorker:
             # Stop consumer gracefully
             logger.debug("Stopping consumer...")
             stop_flag.set()
-            self.consumer.stop()
 
             # Wait for consumer thread to finish (with timeout)
+            # The consumer thread will stop when consume_dict() is interrupted
             consumer_thread.join(timeout=5.0)
             if consumer_thread.is_alive():
                 logger.warning("Consumer thread did not stop within timeout")

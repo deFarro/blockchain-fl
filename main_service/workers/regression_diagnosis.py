@@ -3,7 +3,7 @@
 from typing import Dict, Any, List, Optional, Tuple
 import torch
 from shared.logger import setup_logger
-from client_service.training.model import SimpleCNN
+from shared.models.model import SimpleCNN
 from shared.config import settings
 
 logger = setup_logger(__name__)

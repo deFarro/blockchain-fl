@@ -35,7 +35,7 @@ def main():
 
     try:
         # Start worker (this blocks)
-        worker.start(queue_name="train_tasks")
+        worker.start(queue_name="train_queue")
     except Exception as e:
         logger.error(f"Fatal error in client service: {str(e)}", exc_info=True)
         sys.exit(1)

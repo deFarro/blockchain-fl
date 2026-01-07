@@ -124,10 +124,19 @@ class QueueConsumer:
 
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
-            # Reject message and requeue (temporary error)
-            channel.basic_nack(
-                delivery_tag=method.delivery_tag, requeue=True
-            )
+            # Check if error message indicates task not for this client
+            error_str = str(e).lower()
+            if "task not for this client" in error_str or "not for client" in error_str:
+                logger.debug(f"Task not for this client, requeuing: {str(e)}")
+                # Requeue so another client can pick it up
+                channel.basic_nack(
+                    delivery_tag=method.delivery_tag, requeue=True
+                )
+            else:
+                # Reject message and requeue (temporary error)
+                channel.basic_nack(
+                    delivery_tag=method.delivery_tag, requeue=True
+                )
 
     @handle_connection_error
     def consume_tasks(

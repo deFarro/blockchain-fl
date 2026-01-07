@@ -39,6 +39,8 @@ class BlockchainWorker:
         self.running = False
         # Track current model version for parent_version_id
         self.current_model_version_id: Optional[str] = None
+        # Track latest model version ID (alias for current_model_version_id)
+        self.latest_model_version_id: Optional[str] = None
 
         logger.info("Blockchain worker initialized")
 

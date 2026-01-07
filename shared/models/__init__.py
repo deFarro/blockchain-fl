@@ -14,6 +14,7 @@ from shared.models.task import (
     TrainingCompleteTaskPayload,
     TaskMetadata,
 )
+from shared.models.model import SimpleCNN, create_model
 
 __all__ = [
     "Task",
@@ -28,5 +29,7 @@ __all__ = [
     "DecisionTaskPayload",
     "TrainingCompleteTaskPayload",
     "TaskMetadata",
+    "SimpleCNN",
+    "create_model",
 ]
 

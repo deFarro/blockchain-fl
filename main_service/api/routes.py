@@ -46,15 +46,22 @@ async def list_models(
         List of model versions
     """
     try:
+        logger.info(f"Listing models (limit={limit}, offset={offset})")
+
         # TODO: Query blockchain service for model versions
         # For now, return empty list
-        # In production, this would query the blockchain service API
-        logger.info(f"Listing models (limit={limit}, offset={offset})")
+        # In production, this would query the blockchain service API to get all versions
 
         # Placeholder: In real implementation, query blockchain service
         versions: List[ModelVersionResponse] = []
+        total = 0
 
-        return ModelVersionListResponse(versions=versions, total=len(versions))
+        # Return response
+        response = ModelVersionListResponse(versions=versions, total=total)
+        logger.debug(f"Returning {len(versions)} model versions")
+        return response
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error listing models: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -362,16 +369,22 @@ async def get_training_status(
         logger.info("Training status requested via API")
 
         # Get latest model version from blockchain
-        # For now, we'll need to track latest version ID or query all versions
-        # TODO: Add blockchain service endpoint to get latest version
-        # For now, try to get from blockchain worker's latest version tracking
+        # Use the shared blockchain worker instance from server startup
+        from main_service.api.server import workers
 
-        from main_service.workers.blockchain_worker import BlockchainWorker
+        latest_version_id = None
+        if "blockchain" in workers:
+            blockchain_worker = workers["blockchain"]
+            latest_version_id = blockchain_worker.get_latest_model_version_id()
+        else:
+            # Fallback: create temporary instance (shouldn't happen if workers started correctly)
+            logger.warning(
+                "Blockchain worker not found in shared workers, creating temporary instance"
+            )
+            from main_service.workers.blockchain_worker import BlockchainWorker
 
-        # Create a temporary blockchain worker to get latest version
-        # In production, this should be a shared instance or query blockchain directly
-        blockchain_worker = BlockchainWorker()
-        latest_version_id = blockchain_worker.get_latest_model_version_id()
+            blockchain_worker = BlockchainWorker()
+            latest_version_id = blockchain_worker.get_latest_model_version_id()
 
         if not latest_version_id:
             # No versions exist yet

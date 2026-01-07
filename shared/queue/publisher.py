@@ -130,17 +130,20 @@ class QueuePublisher:
         routing = routing_key or queue_name
 
         # Publish message
-        channel.basic_publish(
-            exchange=exchange,
-            routing_key=routing,
-            body=json.dumps(message),
-            properties=pika.BasicProperties(
-                delivery_mode=2,  # Make message persistent
-                content_type="application/json",
-            ),
-        )
-
-        logger.debug(f"Published message to queue {queue_name}")
+        try:
+            channel.basic_publish(
+                exchange=exchange,
+                routing_key=routing,
+                body=json.dumps(message),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # Make message persistent
+                    content_type="application/json",
+                ),
+            )
+            logger.debug(f"Published message to queue {queue_name}")
+        except Exception as e:
+            logger.error(f"Failed to publish message to queue {queue_name}: {str(e)}", exc_info=True)
+            raise
 
     def close(self):
         """Close connection if we own it."""

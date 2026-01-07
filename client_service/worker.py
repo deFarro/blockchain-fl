@@ -14,6 +14,12 @@ from shared.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+class TaskNotForThisClient(Exception):
+    """Exception raised when a task is not meant for this client (should be requeued)."""
+
+    pass
+
+
 class ClientWorker:
     """Worker that processes training tasks from the queue."""
 
@@ -87,11 +93,16 @@ class ClientWorker:
                     task_client_id_num = int(task_client_id)
 
                 if task_client_id_num != self.client_id:
-                    logger.info(
+                    logger.debug(
                         f"Task {task.task_id} is for client {task_client_id_num}, "
-                        f"but this is client {self.client_id}. Skipping."
+                        f"but this is client {self.client_id}. Requeuing for correct client."
                     )
-                    return True  # Not an error, just not for us
+                    # Raise exception to trigger requeueing
+                    # The consumer will catch this and requeue the message
+                    raise TaskNotForThisClient(
+                        f"Task {task.task_id} is for client {task_client_id_num}, "
+                        f"not client {self.client_id}"
+                    )
 
             # Load previous weights if provided
             previous_weights = self._load_weights_from_cid(payload.weights_cid)
@@ -130,11 +141,18 @@ class ClientWorker:
 
             # Publish to client_updates queue (main service aggregation worker will collect these)
             queue_name = "client_updates"
-            self.publisher.publish_dict(client_update, queue_name)
-
-            logger.info(
-                f"Published weight update to queue '{queue_name}' for task {task.task_id}"
-            )
+            try:
+                self.publisher.publish_dict(client_update, queue_name)
+                logger.info(
+                    f"Published weight update to queue '{queue_name}' for task {task.task_id} "
+                    f"(iteration={payload.iteration}, client_id=client_{self.client_id})"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to publish weight update to queue '{queue_name}': {str(e)}",
+                    exc_info=True,
+                )
+                raise
 
             return True
 
@@ -208,7 +226,7 @@ class ClientWorker:
             logger.warning(f"Unknown task type: {task.task_type}. Skipping.")
             return True  # Not an error, just not handled
 
-    def start(self, queue_name: str = "train_tasks"):
+    def start(self, queue_name: str = "train_queue"):
         """
         Start consuming tasks from the queue.
 
@@ -224,6 +242,9 @@ class ClientWorker:
                 success = self._handle_task(task)
                 if not success:
                     logger.error(f"Failed to process task {task.task_id}")
+            except TaskNotForThisClient:
+                # Re-raise this exception so the consumer can requeue the message
+                raise
             except Exception as e:
                 logger.error(
                     f"Unexpected error handling task {task.task_id}: {str(e)}",

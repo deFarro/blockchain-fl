@@ -27,8 +27,8 @@ This guide explains how to run the federated learning system and use the API/das
 ### Step 2: Start Services
 
 ```bash
-# Start all services
-docker-compose up -d
+# Start all services with 2 client instances (recommended)
+docker-compose up -d --scale client-service=2
 
 # Check status
 docker-compose ps
@@ -40,7 +40,7 @@ docker-compose ps
 - `blockchain-fl-ipfs` - Distributed storage
 - `blockchain-fl-blockchain-service` - Blockchain operations
 - `blockchain-fl-main-service` - Main aggregator service
-- `blockchain-fl-client-service-1`, `blockchain-fl-client-service-2`, ... - Client services
+- `blockchain-fl-client-service-1`, `blockchain-fl-client-service-2`, ... - Client services (number depends on `--scale` flag)
 
 ### Step 3: Access Dashboard
 
@@ -303,7 +303,7 @@ docker-compose logs -f
 # Main service only
 docker-compose logs -f main-service
 
-# Client services only
+# Client services only (shows all client instances)
 docker-compose logs -f client-service
 ```
 
@@ -343,7 +343,7 @@ PATIENCE_THRESHOLD=3          # Consecutive bad iterations before rollback
 SEVERE_DROP_THRESHOLD=2.0     # Immediate rollback threshold (2%)
 
 # Client training
-EPOCHS=100                    # Epochs per training iteration
+EPOCHS=10                     # Epochs per training iteration
 NUM_CLIENTS=2                 # Number of client instances
 ```
 
@@ -358,10 +358,11 @@ NUM_CLIENTS=2                 # Number of client instances
 
 ### No Client Updates
 
-1. Check client services are running: `docker-compose ps client-service`
-2. Check client logs: `docker-compose logs client-service`
-3. Verify queue connectivity: Check RabbitMQ Management UI
-4. Check if TRAIN tasks are in `train_queue`
+1. Check client services are running: `docker-compose ps | grep client-service`
+2. Verify you have multiple clients if needed: `docker-compose up -d --scale client-service=2`
+3. Check client logs: `docker-compose logs client-service`
+4. Verify queue connectivity: Check RabbitMQ Management UI
+5. Check if TRAIN tasks are in `train_queue`
 
 ### Training Stuck
 

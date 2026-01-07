@@ -20,7 +20,7 @@ from shared.storage.encryption import EncryptionService
 from main_service.storage.ipfs_client import IPFSClient
 from main_service.blockchain.fabric_client import FabricClient
 from shared.datasets import get_dataset, DatasetInterface
-from client_service.training.model import SimpleCNN
+from shared.models.model import SimpleCNN
 from shared.config import settings
 from shared.logger import setup_logger
 from shared.monitoring.metrics import get_metrics_collector

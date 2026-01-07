@@ -31,7 +31,7 @@ class ClientConfig(BaseSettings):
     data_dir: str = "data/mnist"
     
     # Training Configuration
-    epochs: int = int(os.getenv("EPOCHS", "100"))  # Number of epochs per training iteration
+    epochs: int = int(os.getenv("EPOCHS", "10"))  # Number of epochs per training iteration
     
     model_config = SettingsConfigDict(
         env_file=".env",

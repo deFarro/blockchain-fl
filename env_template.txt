@@ -28,7 +28,7 @@ ENCRYPTION_KEY=
 
 # Blockchain Service Configuration
 BLOCKCHAIN_SERVICE_URL=http://blockchain-service:8080
-BLOCKCHAIN_SERVICE_PORT=8080
+BLOCKCHAIN_SERVICE_PORT=8081
 
 # Hyperledger Fabric Configuration (used by blockchain-service)
 FABRIC_NETWORK_PROFILE=network.json
@@ -53,7 +53,7 @@ SEVERE_DROP_THRESHOLD=2.0     # Immediate rollback threshold (2%)
 
 # Client Configuration
 NUM_CLIENTS=2                 # Number of client instances
-EPOCHS=100                    # Epochs per training iteration
+EPOCHS=10                     # Epochs per training iteration
 SPLIT_TYPE=iid                # Dataset split type (iid or non_iid)
 DATASET_SEED=42               # Seed for dataset splitting
 
