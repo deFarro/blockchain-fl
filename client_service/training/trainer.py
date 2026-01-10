@@ -1,5 +1,7 @@
 """Training logic for client service."""
 
+import uuid
+import hashlib
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
@@ -74,21 +76,21 @@ class Trainer:
             Tuple of (DataLoader, Dataset)
         """
         # Convert instance_id (string) to numeric client_id for dataset splitting
-        # Use hash to get consistent numeric value from string
         if instance_id is None:
-            import uuid
             instance_id = str(uuid.uuid4())[:8]
-        
-        # Convert instance_id string to numeric value in range [0, num_clients)
-        # Use hash for consistent mapping
-        numeric_client_id = hash(instance_id) % config.num_clients
-        # Ensure positive value
-        if numeric_client_id < 0:
-            numeric_client_id = (-numeric_client_id) % config.num_clients
+
+        # Use deterministic hash (hashlib.md5) instead of Python's hash()
+        # This ensures consistent mapping across runs
+        hash_obj = hashlib.md5(instance_id.encode("utf-8"))
+        hash_int = int(hash_obj.hexdigest(), 16)
+        numeric_client_id = hash_int % config.num_clients
+        logger.info(
+            f"Using hash-based client_id: instance_id={instance_id} -> client_id={numeric_client_id}"
+        )
 
         # Load dataset using factory function
         dataset_loader = get_dataset(
-            dataset_name=getattr(config, 'dataset_name', None),
+            dataset_name=getattr(config, "dataset_name", None),
             data_dir=str(config.data_dir),
             seed=config.dataset_seed,
         )
@@ -110,7 +112,9 @@ class Trainer:
         # PyTorch Dataset implements __len__, but mypy doesn't know this
         # Cast to help mypy understand that Dataset has __len__
         dataset_len = len(cast(Any, train_dataset))
-        logger.info(f"Loaded dataset for instance {instance_id} (numeric_id={numeric_client_id}): {dataset_len} samples")
+        logger.info(
+            f"Loaded dataset for instance {instance_id} (numeric_id={numeric_client_id}): {dataset_len} samples"
+        )
 
         return train_loader, train_dataset
 

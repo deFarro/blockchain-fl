@@ -433,9 +433,6 @@ def test_rollback_worker_handle_rollback_task():
     mock_weights_data = b"test_weights_data"
     mock_tx_id = "tx_rollback_12345"
 
-    # Note: _handle_rollback_task uses run_until_complete, which doesn't work
-    # when there's already a running event loop. We'll test it directly with
-    # the async method instead.
     async def run_test():
         with patch(
             "main_service.workers.rollback_worker.IPFSClient"

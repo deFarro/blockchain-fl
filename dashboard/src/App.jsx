@@ -4,9 +4,9 @@ import Controls from './components/Controls'
 import StatusCard from './components/StatusCard'
 import AccuracyChart from './components/AccuracyChart'
 import VersionsTable from './components/VersionsTable'
-import RollbackModal from './components/RollbackModal'
-import ModelDetailsModal from './components/ModelDetailsModal'
-import ProvenanceModal from './components/ProvenanceModal'
+import Rollback from './components/RollbackModal'
+import ModelDetails from './components/ModelDetailsModal'
+import Provenance from './components/ProvenanceModal'
 import { apiCall } from './utils/api'
 
 const API_BASE = '/api/v1'
@@ -16,19 +16,22 @@ function App() {
     const stored = localStorage.getItem('apiKey')
     return stored || prompt('Enter API Key:', 'your-api-key-here') || 'your-api-key-here'
   })
+  const [activeTab, setActiveTab] = useState('dashboard')
   const [status, setStatus] = useState(null)
   const [versions, setVersions] = useState([])
   const [error, setError] = useState(null)
   const [success, setSuccess] = useState(null)
-  const [showRollbackModal, setShowRollbackModal] = useState(false)
-  const [showModelDetailsModal, setShowModelDetailsModal] = useState(false)
-  const [showProvenanceModal, setShowProvenanceModal] = useState(false)
+  const [selectedVersionId, setSelectedVersionId] = useState(null)
+  const [isLoadingStatus, setIsLoadingStatus] = useState(false)
+  const [isLoadingVersions, setIsLoadingVersions] = useState(false)
 
   useEffect(() => {
     if (apiKey) {
       localStorage.setItem('apiKey', apiKey)
-      refreshStatus()
-      loadVersions()
+      setTimeout(() => {
+        refreshStatus()
+        loadVersions()
+      }, 0)
       const interval = setInterval(() => {
         refreshStatus()
         loadVersions()
@@ -38,15 +41,19 @@ function App() {
   }, [apiKey])
 
   const refreshStatus = async () => {
+    setIsLoadingStatus(true)
     try {
       const data = await apiCall(API_BASE, '/training/status', 'GET', null, apiKey)
       setStatus(data)
     } catch (err) {
       // Silently fail - status might not be available yet
+    } finally {
+      setIsLoadingStatus(false)
     }
   }
 
   const loadVersions = async () => {
+    setIsLoadingVersions(true)
     try {
       const data = await apiCall(API_BASE, '/models?limit=50', 'GET', null, apiKey)
       if (data.versions && data.versions.length > 0) {
@@ -54,6 +61,8 @@ function App() {
       }
     } catch (err) {
       // Silently fail - endpoint might not be implemented yet
+    } finally {
+      setIsLoadingVersions(false)
     }
   }
 
@@ -79,6 +88,7 @@ function App() {
 
   const listModels = async () => {
     try {
+      setActiveTab('models')
       const data = await apiCall(API_BASE, '/models?limit=100', 'GET', null, apiKey)
       if (data.versions && data.versions.length > 0) {
         setVersions(data.versions)
@@ -122,53 +132,54 @@ function App() {
       )}
 
       <Controls
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
         isTraining={status?.is_training || status?.status === 'running'}
         onStartTraining={startTraining}
         onStopTraining={stopTraining}
         onRefresh={refreshStatus}
-        onRollback={() => setShowRollbackModal(true)}
         onListModels={listModels}
-        onViewModelDetails={() => setShowModelDetailsModal(true)}
-        onViewProvenance={() => setShowProvenanceModal(true)}
       />
 
-      <StatusCard status={status} />
+      {activeTab === 'dashboard' && (
+        <>
+          <StatusCard status={status} isLoading={isLoadingStatus} />
+          <AccuracyChart accuracyHistory={status?.accuracy_history} />
+        </>
+      )}
 
-      <AccuracyChart accuracyHistory={status?.accuracy_history} />
+      {activeTab === 'models' && (
+        <VersionsTable versions={versions} isLoading={isLoadingVersions} onViewDetails={(versionId) => {
+          setSelectedVersionId(versionId)
+          setActiveTab('details')
+        }} />
+      )}
 
-      <VersionsTable versions={versions} onViewDetails={(versionId) => {
-        setShowModelDetailsModal(true)
-        // Store versionId for modal
-        localStorage.setItem('selectedVersionId', versionId)
-      }} />
+      {activeTab === 'rollback' && (
+        <Rollback
+          onSuccess={() => {
+            refreshStatus()
+            setSuccess('Rollback successful!')
+          }}
+          apiKey={apiKey}
+          apiBase={API_BASE}
+        />
+      )}
 
-      <RollbackModal
-        isOpen={showRollbackModal}
-        onClose={() => setShowRollbackModal(false)}
-        onSuccess={() => {
-          setShowRollbackModal(false)
-          refreshStatus()
-        }}
-        apiKey={apiKey}
-        apiBase={API_BASE}
-      />
+      {activeTab === 'provenance' && (
+        <Provenance
+          apiKey={apiKey}
+          apiBase={API_BASE}
+        />
+      )}
 
-      <ModelDetailsModal
-        isOpen={showModelDetailsModal}
-        onClose={() => {
-          setShowModelDetailsModal(false)
-          localStorage.removeItem('selectedVersionId')
-        }}
-        apiKey={apiKey}
-        apiBase={API_BASE}
-      />
-
-      <ProvenanceModal
-        isOpen={showProvenanceModal}
-        onClose={() => setShowProvenanceModal(false)}
-        apiKey={apiKey}
-        apiBase={API_BASE}
-      />
+      {activeTab === 'details' && (
+        <ModelDetails
+          apiKey={apiKey}
+          apiBase={API_BASE}
+          initialVersionId={selectedVersionId}
+        />
+      )}
     </div>
   )
 }

@@ -18,9 +18,6 @@ def main():
     logger.info(f"Dataset split type: {config.split_type}")
     logger.info(f"Dataset seed: {config.dataset_seed}")
     logger.info(f"RabbitMQ: {config.rabbitmq_host}:{config.rabbitmq_port}")
-    logger.info(
-        "Note: Each client instance will generate a unique instance_id on startup"
-    )
     logger.info("=" * 60)
 
     # Create worker (this generates the instance_id)

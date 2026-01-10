@@ -223,6 +223,24 @@ class QueueConsumer:
             # Connection error
             logger.debug(f"AMQP connection error while consuming: {str(e)}")
             raise
+        except AttributeError as e:
+            # This can happen when connection is being closed while start_consuming() is running
+            # pika's internal state (_processing_fd_event_map) becomes None during cleanup
+            # This is expected when stop() is called or connection is closed
+            if "'NoneType' object has no attribute 'clear'" in str(
+                e
+            ) or "_processing_fd_event_map" in str(e):
+                logger.debug(
+                    f"Connection cleanup in progress while consuming: {str(e)}"
+                )
+                # Don't re-raise - this is expected when connection is being closed
+            else:
+                # Unexpected AttributeError, re-raise it
+                logger.error(
+                    f"Unexpected AttributeError in consume_tasks: {str(e)}",
+                    exc_info=True,
+                )
+                raise
         except Exception as e:
             logger.error(f"Unexpected error in consume_tasks: {str(e)}", exc_info=True)
             raise
@@ -351,6 +369,24 @@ class QueueConsumer:
             # Connection error
             logger.debug(f"AMQP connection error while consuming: {str(e)}")
             raise
+        except AttributeError as e:
+            # This can happen when connection is being closed while start_consuming() is running
+            # pika's internal state (_processing_fd_event_map) becomes None during cleanup
+            # This is expected when stop() is called or connection is closed
+            if "'NoneType' object has no attribute 'clear'" in str(
+                e
+            ) or "_processing_fd_event_map" in str(e):
+                logger.debug(
+                    f"Connection cleanup in progress while consuming: {str(e)}"
+                )
+                # Don't re-raise - this is expected when connection is being closed
+            else:
+                # Unexpected AttributeError, re-raise it
+                logger.error(
+                    f"Unexpected AttributeError in consume_dict: {str(e)}",
+                    exc_info=True,
+                )
+                raise
         except Exception as e:
             logger.error(f"Unexpected error in consume_dict: {str(e)}", exc_info=True)
             raise

@@ -365,8 +365,8 @@ async def start_training(
         connection = QueueConnection()
         publisher = QueuePublisher(connection=connection)
 
-        # Get number of clients from settings (default to 2 if not set)
-        num_clients = getattr(settings, "num_clients", 2)
+        # Get number of clients from settings
+        num_clients = settings.num_clients
 
         iteration = 1  # Start from iteration 1
 
@@ -499,9 +499,6 @@ async def get_training_status(
 ):
     """
     Get current training status.
-
-    Note: This queries the blockchain for the latest model version and derives status.
-    All training data (iterations, accuracy, rollbacks) is stored in metadata on-chain.
 
     Args:
         api_key: API key for authentication

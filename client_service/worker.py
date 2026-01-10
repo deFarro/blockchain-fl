@@ -170,7 +170,7 @@ class ClientWorker:
 
             # Serialize weight diff to bytes
             weight_diff_bytes = self.trainer.get_model().weights_to_bytes()
-            
+
             # Upload weight diff to IPFS to avoid RabbitMQ frame size limits
             # Weight diffs can be very large (several MB), so we store them in IPFS
             # and only send the CID through RabbitMQ
@@ -178,7 +178,7 @@ class ClientWorker:
                 f"Uploading weight diff to IPFS (size: {len(weight_diff_bytes)} bytes) "
                 f"for iteration {payload.iteration}"
             )
-            
+
             # Upload to IPFS (synchronous wrapper for async operation)
             try:
                 loop = asyncio.get_event_loop()
@@ -186,13 +186,14 @@ class ClientWorker:
                 # No event loop in current thread, create new one
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-            
+
             async def upload_to_ipfs():
                 from shared.storage.ipfs_client import IPFSClient
+
                 async with IPFSClient() as ipfs_client:
                     cid = await ipfs_client.add_bytes(weight_diff_bytes, pin=True)
                     return cid
-            
+
             weight_diff_cid = loop.run_until_complete(upload_to_ipfs())
             logger.info(
                 f"Uploaded weight diff to IPFS: CID={weight_diff_cid} "
@@ -327,7 +328,7 @@ class ClientWorker:
             # All clients receive the same message simultaneously via their own queues
             # Use higher prefetch_count to allow clients to hold multiple messages,
             # preventing one client from monopolizing the queue
-            num_clients = getattr(settings, "num_clients", 2)
+            num_clients = config.num_clients
             prefetch_count = max(
                 num_clients, 5
             )  # At least as many as clients, minimum 5

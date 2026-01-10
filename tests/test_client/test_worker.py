@@ -51,10 +51,6 @@ def test_worker_train_task():
     print(f"Iteration: {test_task.payload['iteration']}")
     print()
 
-    # Note: We don't actually need to publish to RabbitMQ for this test
-    # since we're calling _handle_train_task directly
-    # But if we want to test publishing, we need RabbitMQ
-    # For now, skip publishing and test worker directly
     print("Note: Testing worker directly (not publishing to queue)")
     print()
 

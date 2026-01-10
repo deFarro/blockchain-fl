@@ -81,11 +81,18 @@ services:
       - API_KEY=${API_KEY:-}  # API key for authentication
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ENVIRONMENT=${ENVIRONMENT:-development}
+      # Training Configuration
+      - TARGET_ACCURACY=${TARGET_ACCURACY:-95.0}
+      - MAX_ITERATIONS=${MAX_ITERATIONS:-100}
+      - MAX_ROLLBACKS=${MAX_ROLLBACKS:-5}
+      - CONVERGENCE_PATIENCE=${CONVERGENCE_PATIENCE:-10}
+      - ACCURACY_TOLERANCE=${ACCURACY_TOLERANCE:-0.5}
+      - PATIENCE_THRESHOLD=${PATIENCE_THRESHOLD:-3}
+      - SEVERE_DROP_THRESHOLD=${SEVERE_DROP_THRESHOLD:-2.0}
+      - NUM_CLIENTS=${NUM_CLIENTS:-2}
     volumes:
       - ./shared:/app/shared  # Mount shared code for development
       - ./main_service:/app/main_service  # Mount main service code for development
-      # Note: Dashboard is built into the image, not mounted
-      # Note: Data directory not mounted - PyTorch will download MNIST inside container if needed
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -120,7 +127,6 @@ services:
     volumes:
       - ./shared:/app/shared  # Mount shared code for development
       - ./client_service:/app/client_service  # Mount client service code for development
-      # Note: Data directory not mounted - PyTorch will download MNIST inside container if needed
     depends_on:
       rabbitmq:
         condition: service_healthy

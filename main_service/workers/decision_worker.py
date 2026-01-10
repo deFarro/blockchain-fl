@@ -51,23 +51,15 @@ class DecisionWorker:
         self.state = ModelState()
         self.running = False
 
-        # Configuration parameters
-        self.accuracy_tolerance = getattr(
-            settings, "accuracy_tolerance", 0.5
-        )  # 0.5% tolerance
-        self.patience_threshold = getattr(
-            settings, "patience_threshold", 3
-        )  # 3 iterations
-        self.severe_drop_threshold = getattr(
-            settings, "severe_drop_threshold", 2.0
-        )  # 2% severe drop
-        self.target_accuracy = getattr(settings, "target_accuracy", 95.0)
-        self.convergence_patience = getattr(
-            settings, "convergence_patience", 10
-        )  # 10 iterations
-        self.max_iterations = getattr(settings, "max_iterations", 100)
-        self.max_rollbacks = getattr(settings, "max_rollbacks", 5)
-        self.num_clients = getattr(settings, "num_clients", 2)
+        # Configuration parameters (loaded from settings/env)
+        self.accuracy_tolerance = settings.accuracy_tolerance
+        self.patience_threshold = settings.patience_threshold
+        self.severe_drop_threshold = settings.severe_drop_threshold
+        self.target_accuracy = settings.target_accuracy
+        self.convergence_patience = settings.convergence_patience
+        self.max_iterations = settings.max_iterations
+        self.max_rollbacks = settings.max_rollbacks
+        self.num_clients = settings.num_clients
 
         logger.info("Decision worker initialized")
 

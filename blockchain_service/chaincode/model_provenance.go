@@ -1,9 +1,9 @@
+//go:build !test
 // +build !test
 
 // This file is the chaincode for Hyperledger Fabric.
 // It requires fabric-contract-api-go dependency and is only built when deploying to Fabric.
 // To use: go get github.com/hyperledger/fabric-contract-api-go@v1.2.1
-// Note: This file is excluded from tests using build tag
 
 package main
 
@@ -21,18 +21,18 @@ type ModelProvenanceContract struct {
 
 // ModelVersion represents a model version record stored on blockchain
 type ModelVersion struct {
-	VersionID      string                 `json:"version_id"`
-	ParentVersionID string                `json:"parent_version_id,omitempty"`
-	Hash           string                 `json:"hash"`
-	DiffHash       string                 `json:"diff_hash"`
-	IPFSCID        string                 `json:"ipfs_cid"`
-	Metadata       map[string]interface{} `json:"metadata"`
-	Iteration      int                    `json:"iteration"`
-	NumClients     int                    `json:"num_clients"`
-	ClientIDs      []string               `json:"client_ids"`
-	Timestamp      string                 `json:"timestamp"`
-	ValidationStatus string               `json:"validation_status"` // pending, passed, failed
-	ValidationMetrics map[string]float64  `json:"validation_metrics,omitempty"`
+	VersionID         string                 `json:"version_id"`
+	ParentVersionID   string                 `json:"parent_version_id,omitempty"`
+	Hash              string                 `json:"hash"`
+	DiffHash          string                 `json:"diff_hash"`
+	IPFSCID           string                 `json:"ipfs_cid"`
+	Metadata          map[string]interface{} `json:"metadata"`
+	Iteration         int                    `json:"iteration"`
+	NumClients        int                    `json:"num_clients"`
+	ClientIDs         []string               `json:"client_ids"`
+	Timestamp         string                 `json:"timestamp"`
+	ValidationStatus  string                 `json:"validation_status"` // pending, passed, failed
+	ValidationMetrics map[string]float64     `json:"validation_metrics,omitempty"`
 }
 
 // ValidationRecord represents validation results
@@ -75,16 +75,16 @@ func (s *ModelProvenanceContract) RegisterModelUpdate(ctx contractapi.Transactio
 
 	// Create model version
 	version := ModelVersion{
-		VersionID:      versionID,
-		ParentVersionID: parentVersionID,
-		Hash:           hash,
-		DiffHash:       diffHash,
-		IPFSCID:        ipfsCID,
-		Metadata:       metadata,
-		Iteration:      iteration,
-		NumClients:     numClients,
-		ClientIDs:      clientIDs,
-		Timestamp:      fmt.Sprintf("%d", timestamp.GetSeconds()),
+		VersionID:        versionID,
+		ParentVersionID:  parentVersionID,
+		Hash:             hash,
+		DiffHash:         diffHash,
+		IPFSCID:          ipfsCID,
+		Metadata:         metadata,
+		Iteration:        iteration,
+		NumClients:       numClients,
+		ClientIDs:        clientIDs,
+		Timestamp:        fmt.Sprintf("%d", timestamp.GetSeconds()),
 		ValidationStatus: "pending",
 	}
 
@@ -262,4 +262,3 @@ func main() {
 		fmt.Printf("Error starting model provenance chaincode: %v", err)
 	}
 }
-

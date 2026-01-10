@@ -16,8 +16,12 @@ import pytest
 from unittest.mock import Mock, patch
 from main_service.workers.decision_worker import DecisionWorker, ModelState
 from shared.models.task import Task, TaskType, TaskMetadata, DecisionTaskPayload
+from shared.config import settings
 
 
+@patch.object(settings, "accuracy_tolerance", 0.5)
+@patch.object(settings, "patience_threshold", 3)
+@patch.object(settings, "severe_drop_threshold", 2.0)
 def test_decision_worker_initialization():
     """Test decision worker initialization."""
     print("=" * 60)
@@ -26,6 +30,10 @@ def test_decision_worker_initialization():
     print()
 
     worker = DecisionWorker()
+    # Ensure worker has expected values (in case settings were already loaded)
+    worker.accuracy_tolerance = 0.5
+    worker.patience_threshold = 3
+    worker.severe_drop_threshold = 2.0
 
     assert worker.state.current_iteration == 0
     assert worker.state.best_accuracy == 0.0
@@ -138,6 +146,9 @@ def test_decision_worker_evaluate_rollback_within_tolerance():
     print("=" * 60)
 
 
+@patch.object(settings, "accuracy_tolerance", 0.5)
+@patch.object(settings, "patience_threshold", 3)
+@patch.object(settings, "severe_drop_threshold", 2.0)
 def test_decision_worker_evaluate_rollback_severe_drop():
     """Test rollback evaluation for severe accuracy drop."""
     print("\n" + "=" * 60)
@@ -146,6 +157,10 @@ def test_decision_worker_evaluate_rollback_severe_drop():
     print()
 
     worker = DecisionWorker()
+    # Ensure worker has expected values (in case settings were already loaded)
+    worker.accuracy_tolerance = 0.5
+    worker.patience_threshold = 3
+    worker.severe_drop_threshold = 2.0
 
     # Set best accuracy
     worker.state.best_accuracy = 95.0
@@ -171,6 +186,9 @@ def test_decision_worker_evaluate_rollback_severe_drop():
     print("=" * 60)
 
 
+@patch.object(settings, "accuracy_tolerance", 0.5)
+@patch.object(settings, "patience_threshold", 3)
+@patch.object(settings, "severe_drop_threshold", 2.0)
 def test_decision_worker_evaluate_rollback_patience_exceeded():
     """Test rollback evaluation when patience threshold is exceeded."""
     print("\n" + "=" * 60)
@@ -179,12 +197,15 @@ def test_decision_worker_evaluate_rollback_patience_exceeded():
     print()
 
     worker = DecisionWorker()
+    # Ensure worker has expected values (in case settings were already loaded)
+    worker.accuracy_tolerance = 0.5
+    worker.patience_threshold = 3
+    worker.severe_drop_threshold = 2.0
 
     # Set best accuracy
     worker.state.best_accuracy = 95.0
     worker.state.best_checkpoint_version = "version_1"
     worker.state.best_checkpoint_cid = "QmTest111"
-    worker.state.patience_threshold = 3
 
     # Simulate 3 consecutive bad iterations
     for i in range(3):

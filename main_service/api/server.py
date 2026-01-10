@@ -102,14 +102,10 @@ async def startup_event():
         )
 
         # Start aggregation worker (aggregates client updates)
-        # Note: Aggregation worker's start() is a placeholder
-        # We need to create a wrapper that continuously processes client updates
         aggregation_worker = AggregationWorker()
         workers["aggregation"] = aggregation_worker
 
         # Create a worker thread that continuously processes client updates
-        # Note: Aggregation worker processes updates when enough clients send them for an iteration
-        # For now, we'll process iteration 1, then 2, etc. as they become available
         def aggregation_worker_thread():
             """Continuously process client updates and aggregate them by iteration."""
             try:
@@ -131,7 +127,7 @@ async def startup_event():
                         success = aggregation_worker.process_client_updates(
                             queue_name="client_updates",
                             iteration=current_iteration,
-                            timeout=getattr(settings, "aggregation_timeout"),
+                            timeout=settings.aggregation_timeout,
                             min_clients=2,  # Require at least 2 clients
                         )
 
@@ -216,8 +212,8 @@ async def shutdown_event():
 
 
 if __name__ == "__main__":
-    port = getattr(settings, "api_port", 8000)
-    host = getattr(settings, "api_host", "0.0.0.0")
+    port = settings.api_port
+    host = settings.api_host
 
     logger.info(f"Starting API server on {host}:{port}")
     # Disable access logs to reduce verbosity (application logs still work)

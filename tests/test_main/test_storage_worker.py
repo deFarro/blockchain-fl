@@ -97,8 +97,6 @@ def test_storage_worker_encrypt_and_store():
             print(f"✓ Encrypt and store successful: CID={cid}")
 
             # Verify IPFS was called (with encrypted diff)
-            # Note: We can't verify the exact encrypted value since AES-GCM is non-deterministic
-            # But we can verify it was called with some encrypted bytes
             assert mock_client.add_bytes.called
             call_args = mock_client.add_bytes.call_args
             assert call_args[1]["pin"] is True
@@ -195,9 +193,6 @@ def test_storage_worker_handle_task():
     mock_cid = "QmTest123456789"
 
     # Test handling task
-    # Note: _handle_storage_task uses run_until_complete, which doesn't work
-    # when there's already a running event loop. We need to test it in a sync context
-    # without an existing event loop, or call the async method directly.
     with patch("main_service.workers.storage_worker.IPFSClient") as mock_ipfs_class:
         mock_client = AsyncMock()
         # Mock get_bytes to return the unencrypted diff from IPFS
@@ -224,8 +219,6 @@ def test_storage_worker_handle_task():
         assert get_call_args[0][0] == aggregated_diff_cid
 
         # Verify IPFS add_bytes was called (with encrypted diff)
-        # Note: We can't verify the exact encrypted value since AES-GCM is non-deterministic
-        # But we can verify it was called with some encrypted bytes
         assert mock_client.add_bytes.called
         call_args = mock_client.add_bytes.call_args
         assert call_args[1]["pin"] is True

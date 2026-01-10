@@ -471,7 +471,6 @@ def test_regression_diagnosis_identify_problematic():
     )
 
     # Should identify client_2 as problematic
-    # (Note: In real scenario, this depends on actual model behavior)
     assert isinstance(problematic_clients, list)
     print(f"✓ Diagnosis identified {len(problematic_clients)} problematic client(s)")
     print(f"  Problematic clients: {problematic_clients}")

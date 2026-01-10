@@ -1,6 +1,6 @@
 import React from 'react'
 
-function VersionsTable({ versions, onViewDetails }) {
+function VersionsTable({ versions, onViewDetails, isLoading = false }) {
   const getStatusBadgeClass = (status) => {
     if (!status) return 'bg-blue-100 text-blue-800'
     switch (status.toLowerCase()) {
@@ -33,9 +33,15 @@ function VersionsTable({ versions, onViewDetails }) {
           <tbody>
             <tr>
               <td colSpan="6" className="text-center py-5 text-gray-600">
-                No model versions yet. Start training to create versions.
-                <br />
-                <small>Click "📋 List Models" button to refresh.</small>
+                {isLoading ? (
+                  <span className="inline-block animate-pulse">Loading versions...</span>
+                ) : (
+                  <>
+                    No model versions yet. Start training to create versions.
+                    <br />
+                    <small>Click "📋 List Models" button to refresh.</small>
+                  </>
+                )}
               </td>
             </tr>
           </tbody>

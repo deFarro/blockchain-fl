@@ -304,9 +304,6 @@ def test_validation_worker_handle_validate_task():
     )
 
     # Mock IPFS client
-    # Note: _handle_validate_task uses run_until_complete, which doesn't work
-    # when there's already a running event loop. We'll test it directly with
-    # the async method instead.
     async def run_test():
         with patch(
             "main_service.workers.validation_worker.IPFSClient"

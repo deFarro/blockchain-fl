@@ -1,6 +1,5 @@
 """Client service configuration."""
 
-import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 from shared.logger import setup_logger
@@ -14,28 +13,28 @@ class ClientConfig(BaseSettings):
     """Client service configuration."""
 
     # Client identification
-    num_clients: int = int(os.getenv("NUM_CLIENTS", "2"))
-    split_type: str = os.getenv("SPLIT_TYPE", "iid")  # iid or non_iid
-    dataset_seed: int = int(os.getenv("DATASET_SEED", "42"))
+    num_clients: int = 2  # Number of client instances
+    split_type: str = "iid"  # Dataset split type: iid or non_iid
+    dataset_seed: int = 42  # Seed for dataset splitting
 
     # RabbitMQ Configuration
-    rabbitmq_host: str = os.getenv("RABBITMQ_HOST", "rabbitmq")
-    rabbitmq_port: int = int(os.getenv("RABBITMQ_PORT", "5672"))
-    rabbitmq_user: str = os.getenv("RABBITMQ_USER", "admin")
-    rabbitmq_password: str = os.getenv("RABBITMQ_PASSWORD", "admin")
-    rabbitmq_vhost: str = os.getenv("RABBITMQ_VHOST", "/")
+    rabbitmq_host: str = (
+        "rabbitmq"  # Use service name in Docker, localhost for local dev
+    )
+    rabbitmq_port: int = 5672
+    rabbitmq_user: str = "admin"
+    rabbitmq_password: str = "admin"
+    rabbitmq_vhost: str = "/"
 
     # Application Configuration
-    log_level: str = os.getenv("LOG_LEVEL", "INFO")
-    environment: str = os.getenv("ENVIRONMENT", "development")
+    log_level: str = "INFO"
+    environment: str = "development"
 
     # Dataset Configuration
     data_dir: str = "data/mnist"
 
     # Training Configuration
-    epochs: int = int(
-        os.getenv("EPOCHS", "1")
-    )  # Number of epochs per training iteration
+    epochs: int = 1  # Number of epochs per training iteration
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"

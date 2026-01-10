@@ -247,8 +247,6 @@ class AggregationWorker:
         start_time = time.time()
 
         # Set current iteration being processed
-        # Note: The actual current iteration should be read from blockchain
-        # This is just a local cache for late update rejection
         self.current_iteration = iteration
 
         logger.info(
@@ -456,8 +454,6 @@ class AggregationWorker:
                 logger.error(f"Error in consumer thread: {str(e)}", exc_info=True)
             finally:
                 # Clean up the collection-specific connection
-                # Note: stop() may have already been called from main thread
-                # but it's idempotent, so calling it again is safe
                 try:
                     # Stop consuming (idempotent - safe to call multiple times)
                     # This ensures consuming is stopped even if main thread's stop() failed

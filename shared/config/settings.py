@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     )
     excluded_clients: List[str] = []  # List of client IDs to exclude from aggregation
 
+    # Training Configuration
+    target_accuracy: float = 95.0  # Target accuracy to achieve (percentage)
+    max_iterations: int = 100  # Maximum training iterations
+    max_rollbacks: int = 5  # Maximum rollbacks before stopping
+    convergence_patience: int = 10  # Iterations without improvement before convergence
+    accuracy_tolerance: float = 0.5  # Allowed accuracy drop (percentage)
+    patience_threshold: int = 3  # Consecutive bad iterations before rollback
+    severe_drop_threshold: float = 2.0  # Immediate rollback threshold (percentage)
+    num_clients: int = 2  # Number of client instances
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
