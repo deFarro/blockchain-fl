@@ -8,17 +8,19 @@ import (
 	"os"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/blockchain-fl/blockchain-service/fabric"
+	"github.com/gorilla/mux"
 )
 
 // ModelVersion represents a model version record
 type ModelVersion struct {
-	VersionID      string                 `json:"version_id"`
-	ParentVersionID string                `json:"parent_version_id,omitempty"`
-	Hash           string                 `json:"hash"`
-	Metadata       map[string]interface{} `json:"metadata"`
-	Timestamp      string                 `json:"timestamp"`
+	VersionID         string                 `json:"version_id"`
+	ParentVersionID   string                 `json:"parent_version_id,omitempty"`
+	Hash              string                 `json:"hash"`
+	Metadata          map[string]interface{} `json:"metadata"`
+	Timestamp         string                 `json:"timestamp"`
+	ValidationStatus  string                 `json:"validation_status,omitempty"`
+	ValidationMetrics map[string]float64     `json:"validation_metrics,omitempty"`
 }
 
 // ValidationRecord represents validation results
@@ -40,14 +42,14 @@ type RollbackEvent struct {
 type BlockchainService struct {
 	fabricClient *fabric.FabricClient
 	// In-memory storage for development mode (when Fabric is not configured)
-	records map[string]ModelVersion
+	records   map[string]ModelVersion
 	useFabric bool
 }
 
 // NewBlockchainService creates a new blockchain service
 func NewBlockchainService() *BlockchainService {
 	service := &BlockchainService{
-		records: make(map[string]ModelVersion),
+		records:   make(map[string]ModelVersion),
 		useFabric: false,
 	}
 
@@ -67,10 +69,10 @@ func NewBlockchainService() *BlockchainService {
 
 // RegisterModelUpdateRequest represents a request to register a model update
 type RegisterModelUpdateRequest struct {
-	ModelVersionID string                 `json:"model_version_id"`
-	ParentVersionID string                `json:"parent_version_id,omitempty"`
-	Hash           string                 `json:"hash"`
-	Metadata       map[string]interface{} `json:"metadata"`
+	ModelVersionID  string                 `json:"model_version_id"`
+	ParentVersionID string                 `json:"parent_version_id,omitempty"`
+	Hash            string                 `json:"hash"`
+	Metadata        map[string]interface{} `json:"metadata"`
 }
 
 // RegisterModelUpdateResponse represents the response
@@ -106,11 +108,13 @@ type RollbackModelResponse struct {
 
 // GetProvenanceResponse represents provenance information
 type GetProvenanceResponse struct {
-	VersionID      string                 `json:"version_id"`
-	ParentVersionID string                `json:"parent_version_id,omitempty"`
-	Hash           string                 `json:"hash"`
-	Metadata       map[string]interface{} `json:"metadata"`
-	Timestamp      string                 `json:"timestamp"`
+	VersionID         string                 `json:"version_id"`
+	ParentVersionID   string                 `json:"parent_version_id,omitempty"`
+	Hash              string                 `json:"hash"`
+	Metadata          map[string]interface{} `json:"metadata"`
+	Timestamp         string                 `json:"timestamp"`
+	ValidationStatus  string                 `json:"validation_status,omitempty"`
+	ValidationMetrics map[string]float64     `json:"validation_metrics,omitempty"`
 }
 
 // HealthResponse represents health check response
@@ -138,7 +142,7 @@ func (bs *BlockchainService) registerModelUpdate(w http.ResponseWriter, r *http.
 		// Use Fabric SDK
 		// Extract metadata from request
 		metadataJSON, _ := json.Marshal(req.Metadata)
-		
+
 		// Extract iteration and num_clients from metadata if present
 		iteration := 0
 		numClients := 0
@@ -157,7 +161,7 @@ func (bs *BlockchainService) registerModelUpdate(w http.ResponseWriter, r *http.
 			}
 		}
 		clientIDsJSON, _ := json.Marshal(clientIDs)
-		
+
 		// Get diff_hash and ipfs_cid from metadata
 		diffHash := ""
 		ipfsCID := ""
@@ -188,11 +192,11 @@ func (bs *BlockchainService) registerModelUpdate(w http.ResponseWriter, r *http.
 	if !bs.useFabric {
 		// Fallback to in-memory storage
 		version := ModelVersion{
-			VersionID:      req.ModelVersionID,
+			VersionID:       req.ModelVersionID,
 			ParentVersionID: req.ParentVersionID,
-			Hash:           req.Hash,
-			Metadata:       req.Metadata,
-			Timestamp:      fmt.Sprintf("%d", time.Now().Unix()),
+			Hash:            req.Hash,
+			Metadata:        req.Metadata,
+			Timestamp:       fmt.Sprintf("%d", time.Now().Unix()),
 		}
 		bs.records[req.ModelVersionID] = version
 		txID = fmt.Sprintf("tx_%s", req.ModelVersionID)
@@ -233,6 +237,15 @@ func (bs *BlockchainService) recordValidation(w http.ResponseWriter, r *http.Req
 
 	if !bs.useFabric {
 		// Fallback to in-memory storage
+		// Update the stored version with validation data
+		if version, exists := bs.records[req.ModelVersionID]; exists {
+			version.ValidationStatus = "passed"
+			if req.Accuracy < 0.5 {
+				version.ValidationStatus = "failed"
+			}
+			version.ValidationMetrics = req.Metrics
+			bs.records[req.ModelVersionID] = version
+		}
 		log.Printf("Validation recorded: version=%s, accuracy=%.4f", req.ModelVersionID, req.Accuracy)
 		txID = fmt.Sprintf("tx_validation_%s", req.ModelVersionID)
 	}
@@ -259,9 +272,9 @@ func (bs *BlockchainService) rollbackModel(w http.ResponseWriter, r *http.Reques
 	if bs.useFabric && bs.fabricClient != nil {
 		// Use Fabric SDK
 		// Determine current version (would need to track this, for now use empty)
-		fromVersionID := "" // In a real implementation, track current version
+		fromVersionID := ""        // In a real implementation, track current version
 		triggeredBy := "automatic" // Could be extracted from request metadata
-		
+
 		txID, err = bs.fabricClient.RollbackModel(
 			fromVersionID,
 			req.TargetVersionID,
@@ -314,11 +327,13 @@ func (bs *BlockchainService) getProvenance(w http.ResponseWriter, r *http.Reques
 	}
 
 	response := GetProvenanceResponse{
-		VersionID:      version.VersionID,
-		ParentVersionID: version.ParentVersionID,
-		Hash:           version.Hash,
-		Metadata:       version.Metadata,
-		Timestamp:      version.Timestamp,
+		VersionID:         version.VersionID,
+		ParentVersionID:   version.ParentVersionID,
+		Hash:              version.Hash,
+		Metadata:          version.Metadata,
+		Timestamp:         version.Timestamp,
+		ValidationStatus:  version.ValidationStatus,
+		ValidationMetrics: version.ValidationMetrics,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -339,11 +354,13 @@ func (bs *BlockchainService) listModels(w http.ResponseWriter, r *http.Request) 
 		// Fallback to in-memory storage
 		for _, version := range bs.records {
 			versions = append(versions, GetProvenanceResponse{
-				VersionID:      version.VersionID,
-				ParentVersionID: version.ParentVersionID,
-				Hash:           version.Hash,
-				Metadata:       version.Metadata,
-				Timestamp:      version.Timestamp,
+				VersionID:         version.VersionID,
+				ParentVersionID:   version.ParentVersionID,
+				Hash:              version.Hash,
+				Metadata:          version.Metadata,
+				Timestamp:         version.Timestamp,
+				ValidationStatus:  version.ValidationStatus,
+				ValidationMetrics: version.ValidationMetrics,
 			})
 		}
 	}
@@ -372,7 +389,7 @@ func main() {
 	}
 
 	service := NewBlockchainService()
-	
+
 	// Cleanup on exit
 	defer func() {
 		if service.fabricClient != nil {
@@ -390,11 +407,10 @@ func main() {
 
 	log.Printf("Blockchain service starting on port %s", port)
 	if service.useFabric {
-		log.Println("✓ Connected to Hyperledger Fabric network")
+		log.Println("Connected to Hyperledger Fabric network")
 	} else {
 		log.Println("⚠ Running in development mode (in-memory storage)")
 		log.Println("  To use Fabric, configure FABRIC_NETWORK_PROFILE and FABRIC_WALLET_PATH")
 	}
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), r))
 }
-

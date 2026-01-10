@@ -91,7 +91,7 @@ async def startup_event():
         decision_worker = DecisionWorker()
         workers["decision"] = decision_worker
         worker_threads["decision"] = start_worker_in_thread(
-            "decision", decision_worker, "decision"
+            "decision", decision_worker, "decision_queue"
         )
 
         # Start validation worker (validates aggregated models)

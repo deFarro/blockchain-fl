@@ -77,7 +77,7 @@ class StorageWorker:
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        logger.info("✓ Hash verification passed - diff content matches blockchain hash")
+        logger.info("Hash verification passed - diff content matches blockchain hash")
 
         # Encrypt the diff
         logger.info(f"Encrypting aggregated diff for version {model_version_id}")
@@ -104,7 +104,7 @@ class StorageWorker:
             )
 
             logger.info(
-                f"✓ Uploaded to IPFS: CID={cid} (duration: {upload_duration:.3f}s, "
+                f"Uploaded to IPFS: CID={cid} (duration: {upload_duration:.3f}s, "
                 f"size: {len(encrypted_diff)} bytes)"
             )
 
@@ -113,7 +113,7 @@ class StorageWorker:
             if cid not in str(pin_info):
                 logger.warning(f"CID {cid} may not be pinned correctly")
             else:
-                logger.debug(f"✓ CID {cid} is pinned")
+                logger.debug(f"CID {cid} is pinned")
 
         return str(cid)  # Ensure CID is returned as string
 
@@ -133,25 +133,50 @@ class StorageWorker:
             # Parse payload
             payload = StorageWriteTaskPayload(**task.payload)
 
-            # Extract aggregated_diff and blockchain_hash from payload
-            aggregated_diff_str = payload.aggregated_diff
+            # Extract aggregated_diff_cid and blockchain_hash from payload
+            aggregated_diff_cid = payload.aggregated_diff_cid
             blockchain_hash = payload.blockchain_hash
             model_version_id = payload.model_version_id
 
+            # Download aggregated diff from IPFS
+            logger.info(
+                f"Downloading aggregated diff from IPFS: CID={aggregated_diff_cid}"
+            )
+
             # Run async encryption and storage
-            loop = asyncio.get_event_loop()
-            cid = loop.run_until_complete(
-                self._encrypt_and_store(
+            # Create new event loop if one doesn't exist in this thread
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                # No event loop in current thread, create new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            async def download_and_store():
+                # Download from IPFS
+                async with IPFSClient() as ipfs_client:
+                    aggregated_diff_bytes = await ipfs_client.get_bytes(
+                        aggregated_diff_cid
+                    )
+                    aggregated_diff_str = aggregated_diff_bytes.decode("utf-8")
+                    logger.info(
+                        f"Downloaded aggregated diff from IPFS: CID={aggregated_diff_cid}, "
+                        f"size={len(aggregated_diff_str.encode('utf-8'))} bytes"
+                    )
+
+                # Encrypt and store
+                return await self._encrypt_and_store(
                     aggregated_diff_str, blockchain_hash, model_version_id
                 )
-            )
+
+            cid = loop.run_until_complete(download_and_store())
 
             # Publish VALIDATE task with IPFS CID
             # Use task.parent_version_id as the parent for the validate task
             self._publish_validate_task(model_version_id, cid, task.parent_version_id)
 
             logger.info(
-                f"✓ Storage task completed: version={model_version_id}, CID={cid}"
+                f"Storage task completed: version={model_version_id}, CID={cid}"
             )
             return True
 

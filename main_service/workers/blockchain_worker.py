@@ -19,6 +19,7 @@ from main_service.blockchain.fabric_client import FabricClient
 from shared.utils.hashing import compute_hash
 from shared.logger import setup_logger
 from shared.monitoring.metrics import get_metrics_collector
+from shared.storage.ipfs_client import IPFSClient
 
 logger = setup_logger(__name__)
 
@@ -132,7 +133,7 @@ class BlockchainWorker:
             )
 
             logger.info(
-                f"✓ Model version {model_version_id} registered on blockchain: "
+                f"Model version {model_version_id} registered on blockchain: "
                 f"tx_id={transaction_id} (duration: {duration:.3f}s)"
             )
             return transaction_id
@@ -230,7 +231,7 @@ class BlockchainWorker:
 
     def _publish_storage_task(
         self,
-        aggregated_diff_str: str,
+        aggregated_diff_cid: str,
         blockchain_hash: str,
         model_version_id: str,
         parent_version_id: Optional[str],
@@ -239,25 +240,56 @@ class BlockchainWorker:
         Publish STORAGE_WRITE task to queue.
 
         Args:
-            aggregated_diff_str: Aggregated diff as JSON string
+            aggregated_diff_cid: IPFS CID of aggregated diff (not the diff itself)
             blockchain_hash: Hash from blockchain transaction
             model_version_id: Model version identifier
             parent_version_id: Parent version ID
         """
+        # Create payload - ensure we only include the CID, not the actual diff
+        payload_dict = StorageWriteTaskPayload(
+            aggregated_diff_cid=aggregated_diff_cid,
+            blockchain_hash=blockchain_hash,
+            model_version_id=model_version_id,
+        ).model_dump()
+
+        # Verify payload doesn't contain large data
+        payload_size = len(json.dumps(payload_dict).encode("utf-8"))
+        if payload_size > 10000:  # More than 10KB is suspicious
+            logger.error(
+                f"WARNING: Storage task payload is suspiciously large: {payload_size} bytes. "
+                f"Payload keys: {list(payload_dict.keys())}"
+            )
+
         storage_task = Task(
             task_id=f"storage-{model_version_id}-{int(time.time())}",
             task_type=TaskType.STORAGE_WRITE,
-            payload=StorageWriteTaskPayload(
-                aggregated_diff=aggregated_diff_str,
-                blockchain_hash=blockchain_hash,
-                model_version_id=model_version_id,
-            ).model_dump(),
+            payload=payload_dict,
             metadata=TaskMetadata(source="blockchain_worker"),
             model_version_id=model_version_id,
             parent_version_id=parent_version_id,
         )
 
         queue_name = "storage_write"
+
+        # Log message size before publishing
+        task_dict = storage_task.to_dict()
+        message_size = len(json.dumps(task_dict).encode("utf-8"))
+        logger.debug(
+            f"Publishing STORAGE_WRITE task: message_size={message_size} bytes, "
+            f"payload_size={payload_size} bytes, aggregated_diff_cid={aggregated_diff_cid}"
+        )
+
+        if message_size > 100000:  # More than 100KB is definitely wrong
+            logger.error(
+                f"ERROR: Task message is too large: {message_size} bytes! "
+                f"This should only contain metadata and CIDs. "
+                f"Task payload: {json.dumps(payload_dict, indent=2)[:500]}"
+            )
+            raise ValueError(
+                f"Task message too large ({message_size} bytes). "
+                f"Only metadata and IPFS CIDs should be sent through RabbitMQ."
+            )
+
         self.publisher.publish_task(storage_task, queue_name)
 
         logger.info(
@@ -282,9 +314,39 @@ class BlockchainWorker:
             # publishes a simplified payload)
             payload = task.payload
 
-            aggregated_diff_str = payload.get("aggregated_diff")
-            if not aggregated_diff_str:
-                raise ValueError("Missing 'aggregated_diff' in payload")
+            # Create event loop once for all async operations
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                # No event loop in current thread, create new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            # Get aggregated diff CID from IPFS (aggregation worker uploads it to avoid frame size limits)
+            aggregated_diff_cid = payload.get("aggregated_diff_cid")
+            if not aggregated_diff_cid:
+                raise ValueError(
+                    "Missing 'aggregated_diff_cid' in payload. "
+                    "Only IPFS CIDs should be sent through RabbitMQ."
+                )
+
+            # Download aggregated diff from IPFS (needed for hash computation)
+            logger.info(
+                f"Downloading aggregated diff from IPFS: CID={aggregated_diff_cid}"
+            )
+
+            async def download_from_ipfs():
+                async with IPFSClient() as ipfs_client:
+                    aggregated_diff_bytes = await ipfs_client.get_bytes(
+                        aggregated_diff_cid
+                    )
+                    return aggregated_diff_bytes.decode("utf-8")
+
+            aggregated_diff_str = loop.run_until_complete(download_from_ipfs())
+            logger.info(
+                f"Downloaded aggregated diff from IPFS: CID={aggregated_diff_cid}, "
+                f"size={len(aggregated_diff_str.encode('utf-8'))} bytes"
+            )
 
             iteration = payload.get("iteration")
             if iteration is None:
@@ -293,8 +355,7 @@ class BlockchainWorker:
             num_clients = payload.get("num_clients", 0)
             client_ids = payload.get("client_ids", [])
 
-            # Run async blockchain processing
-            loop = asyncio.get_event_loop()
+            # Run async blockchain processing (reuse the same event loop)
             result = loop.run_until_complete(
                 self._process_blockchain_write(
                     aggregated_diff_str=aggregated_diff_str,
@@ -304,16 +365,17 @@ class BlockchainWorker:
                 )
             )
 
-            # Publish STORAGE_WRITE task
+            # Publish STORAGE_WRITE task with IPFS CID (not the diff itself)
+            # The storage worker will download from IPFS using this CID
             self._publish_storage_task(
-                aggregated_diff_str=aggregated_diff_str,
+                aggregated_diff_cid=aggregated_diff_cid,
                 blockchain_hash=result["blockchain_hash"],
                 model_version_id=result["model_version_id"],
                 parent_version_id=result["parent_version_id"],
             )
 
             logger.info(
-                f"✓ BLOCKCHAIN_WRITE task completed: "
+                f"BLOCKCHAIN_WRITE task completed: "
                 f"version={result['model_version_id']}, "
                 f"tx_id={result['transaction_id']}"
             )

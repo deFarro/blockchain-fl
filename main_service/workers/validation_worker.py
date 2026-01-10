@@ -48,6 +48,18 @@ class ValidationWorker:
         self.test_loader: Optional[DataLoader] = None
         self.running = False
 
+        # Prefetch test dataset on startup
+        logger.info("Prefetching test dataset on startup...")
+        try:
+            self._load_test_dataset()
+            logger.info("Test dataset prefetched successfully")
+        except Exception as e:
+            logger.warning(
+                f"Failed to prefetch test dataset: {e}. "
+                "It will be loaded on first validation.",
+                exc_info=True,
+            )
+
         logger.info("Validation worker initialized")
 
     def _load_test_dataset(self) -> DataLoader:
@@ -67,9 +79,7 @@ class ValidationWorker:
                 shuffle=False,
                 num_workers=0,
             )
-            logger.info(
-                f"✓ Test dataset loaded: {len(cast(Any, test_dataset))} samples"
-            )
+            logger.info(f"Test dataset loaded: {len(cast(Any, test_dataset))} samples")
 
         return self.test_loader
 
@@ -99,14 +109,14 @@ class ValidationWorker:
         diff_str = decrypted_diff_bytes.decode("utf-8")
         diff_dict: Dict[str, Any] = json.loads(diff_str)
 
-        logger.info("✓ Diff retrieved and decrypted successfully")
+        logger.info("Diff retrieved and decrypted successfully")
         return diff_dict
 
     async def _load_previous_weights(
         self, parent_version_id: Optional[str]
     ) -> Dict[str, Any]:
         """
-        Load previous model weights.
+        Load previous model weights from parent version.
 
         Args:
             parent_version_id: Parent version ID (if None, use initial weights)
@@ -119,12 +129,51 @@ class ValidationWorker:
             logger.info("Using initial model weights")
             return self.model.get_weights()
 
-        # TODO: Load weights from IPFS using parent_version_id
-        # For now, use initial weights
-        logger.warning(
-            f"Loading weights from parent version {parent_version_id} not yet implemented. Using initial weights."
-        )
-        return self.model.get_weights()
+        # Get parent version's IPFS CID from blockchain
+        logger.info(f"Loading weights from parent version {parent_version_id}")
+        try:
+            async with FabricClient() as blockchain_client:
+                parent_provenance = await blockchain_client.get_model_provenance(
+                    parent_version_id
+                )
+
+            # Extract IPFS CID from metadata
+            parent_metadata = parent_provenance.get("metadata", {})
+            parent_weights_cid = parent_metadata.get("ipfs_cid")
+
+            if not parent_weights_cid:
+                logger.warning(
+                    f"Parent version {parent_version_id} has no ipfs_cid in metadata. "
+                    "Using initial weights."
+                )
+                return self.model.get_weights()
+
+            # Download and decrypt parent weights from IPFS
+            logger.info(
+                f"Downloading parent weights from IPFS: CID={parent_weights_cid}"
+            )
+            async with IPFSClient() as ipfs_client:
+                encrypted_weights = await ipfs_client.get_bytes(parent_weights_cid)
+
+            # Decrypt weights
+            decrypted_weights = self.encryption_service.decrypt_diff(encrypted_weights)
+
+            # Deserialize weights
+            weights_json = decrypted_weights.decode("utf-8")
+            weights_dict: Dict[str, Any] = json.loads(weights_json)
+
+            logger.info(
+                f"Successfully loaded weights from parent version {parent_version_id}"
+            )
+            return weights_dict
+
+        except Exception as e:
+            logger.error(
+                f"Failed to load weights from parent version {parent_version_id}: {str(e)}. "
+                "Using initial weights.",
+                exc_info=True,
+            )
+            return self.model.get_weights()
 
     def _evaluate_model(self, test_loader: DataLoader) -> Dict[str, float]:
         """
@@ -196,7 +245,7 @@ class ValidationWorker:
         logger.info("Applying diff to model weights...")
         self.model.set_weights(previous_weights)
         self.model.apply_weight_diff(diff_dict)
-        logger.info("✓ Diff applied to model")
+        logger.info("Diff applied to model")
 
         # Load test dataset
         test_loader = self._load_test_dataset()
@@ -225,7 +274,7 @@ class ValidationWorker:
         }
 
         logger.info(
-            f"✓ Validation complete for version {model_version_id}: "
+            f"Validation complete for version {model_version_id}: "
             f"accuracy={metrics.get('accuracy', 0.0):.2f}% "
             f"(duration: {eval_duration:.3f}s)"
         )
@@ -262,7 +311,7 @@ class ValidationWorker:
         )
 
         self.publisher.publish_task(task=decision_task, queue_name="decision_queue")
-        logger.info(f"✓ Published DECISION task for version {model_version_id}")
+        logger.info(f"Published DECISION task for version {model_version_id}")
 
     def _handle_validate_task(self, task: Task) -> bool:
         """
@@ -286,15 +335,55 @@ class ValidationWorker:
             parent_version_id = payload.parent_version_id
 
             # Run async validation
-            loop = asyncio.get_event_loop()
+            # Create new event loop if one doesn't exist in this thread
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                # No event loop in current thread, create new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
             validation_result = loop.run_until_complete(
                 self._validate_model(ipfs_cid, model_version_id, parent_version_id)
             )
+
+            # Get iteration from model version metadata
+            iteration = None
+            try:
+
+                async def get_iteration_async():
+                    async with FabricClient() as blockchain_client:
+                        provenance = await blockchain_client.get_model_provenance(
+                            model_version_id
+                        )
+                        metadata = provenance.get("metadata", {})
+                        if isinstance(metadata, dict):
+                            iter_val = metadata.get("iteration")
+                            if iter_val is not None:
+                                return int(iter_val)
+                        # Fallback: check top-level iteration field
+                        iter_val = provenance.get("iteration")
+                        if iter_val is not None:
+                            return int(iter_val)
+                        return None
+
+                iteration = loop.run_until_complete(get_iteration_async())
+                if iteration is not None:
+                    validation_result["iteration"] = iteration
+                    logger.debug(
+                        f"Found iteration {iteration} for model version {model_version_id}"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to get iteration for model version {model_version_id}: {e}. "
+                    "Decision worker will use current_iteration state."
+                )
 
             # Record validation on blockchain (async)
             metrics = validation_result.get("metrics", {})
             accuracy = metrics.get("accuracy", 0.0)
             try:
+                # Reuse the same event loop
                 loop = asyncio.get_event_loop()
 
                 async def record_validation_async():
@@ -307,7 +396,7 @@ class ValidationWorker:
 
                 loop.run_until_complete(record_validation_async())
                 logger.info(
-                    f"✓ Validation recorded on blockchain for version {model_version_id}"
+                    f"Validation recorded on blockchain for version {model_version_id}"
                 )
             except Exception as e:
                 logger.error(
@@ -326,7 +415,7 @@ class ValidationWorker:
             )
 
             logger.info(
-                f"✓ Validation task completed: version={model_version_id}, "
+                f"Validation task completed: version={model_version_id}, "
                 f"accuracy={validation_result['metrics']['accuracy']:.2f}%"
             )
             return True

@@ -52,12 +52,12 @@ class RollbackWorker:
                 weights_data = await ipfs_client.get_bytes(target_weights_cid)
                 if weights_data:
                     logger.info(
-                        f"✓ Rollback target weights verified: {len(weights_data)} bytes"
+                        f"Rollback target weights verified: {len(weights_data)} bytes"
                     )
                     return True
                 else:
                     logger.error(
-                        f"✗ Rollback target weights not found: CID={target_weights_cid}"
+                        f"Rollback target weights not found: CID={target_weights_cid}"
                     )
                     return False
 
@@ -94,12 +94,10 @@ class RollbackWorker:
                 transaction_id: str = cast(str, transaction_id_raw)
 
             if transaction_id:
-                logger.info(
-                    f"✓ Rollback recorded on blockchain: tx_id={transaction_id}"
-                )
+                logger.info(f"Rollback recorded on blockchain: tx_id={transaction_id}")
                 return transaction_id
             else:
-                logger.error("✗ Failed to record rollback on blockchain")
+                logger.error("Failed to record rollback on blockchain")
                 return None
 
         except Exception as e:
@@ -152,7 +150,7 @@ class RollbackWorker:
             )
 
         logger.info(
-            f"✓ Rollback processed successfully: target_version={target_version_id}, "
+            f"Rollback processed successfully: target_version={target_version_id}, "
             f"tx_id={transaction_id}"
         )
         return True
@@ -179,7 +177,14 @@ class RollbackWorker:
             cutoff_version_id = payload.cutoff_version_id
 
             # Run async rollback processing
-            loop = asyncio.get_event_loop()
+            # Create new event loop if one doesn't exist in this thread
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                # No event loop in current thread, create new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
             success = loop.run_until_complete(
                 self._process_rollback(
                     target_version_id,
@@ -191,11 +196,11 @@ class RollbackWorker:
 
             if success:
                 logger.info(
-                    f"✓ Rollback task completed: target_version={target_version_id}"
+                    f"Rollback task completed: target_version={target_version_id}"
                 )
             else:
                 logger.error(
-                    f"✗ Rollback task failed: target_version={target_version_id}"
+                    f"Rollback task failed: target_version={target_version_id}"
                 )
 
             return success

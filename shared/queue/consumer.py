@@ -279,7 +279,14 @@ class QueueConsumer:
                 logger.debug(f"Received message from queue {method.routing_key}")
                 if auto_ack:
                     callback(message_dict)
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                    # Check if channel is still open before acking
+                    if ch.is_open:
+                        try:
+                            ch.basic_ack(delivery_tag=method.delivery_tag)
+                        except Exception as ack_error:
+                            logger.debug(
+                                f"Failed to ack message (channel may be closed): {ack_error}"
+                            )
                 else:
                     # Pass channel and delivery_tag to callback for manual ack
                     # Type checker can't verify this at compile time since callback signature
@@ -287,10 +294,24 @@ class QueueConsumer:
                     callback(message_dict, ch, method.delivery_tag)  # type: ignore[misc]
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse message: {str(e)}")
-                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                # Check if channel is still open before nacking
+                if ch.is_open:
+                    try:
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                    except Exception as nack_error:
+                        logger.debug(
+                            f"Failed to nack message after JSON decode error (channel may be closed): {nack_error}"
+                        )
             except Exception as e:
                 logger.error(f"Error processing message: {str(e)}")
-                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                # Check if channel is still open before nacking
+                if ch.is_open:
+                    try:
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    except Exception as nack_error:
+                        logger.debug(
+                            f"Failed to nack message after processing error (channel may be closed): {nack_error}"
+                        )
 
         # Set up consumer
         channel.basic_consume(
@@ -320,6 +341,12 @@ class QueueConsumer:
             # Connection was closed (e.g., by stop() from another thread or network issue)
             logger.debug(f"Stream connection lost while consuming: {str(e)}")
             # Don't re-raise - this is expected when stop() is called
+        except pika.exceptions.ChannelClosedByBroker as e:
+            # Channel was closed by broker (e.g., PRECONDITION_FAILED - unknown delivery tag)
+            # This can happen when stop() is called after messages have been acknowledged
+            # It's safe to ignore - consuming has already stopped
+            logger.debug(f"Channel closed by broker while consuming: {str(e)}")
+            # Don't re-raise - this is expected when stop() is called
         except pika.exceptions.AMQPConnectionError as e:
             # Connection error
             logger.debug(f"AMQP connection error while consuming: {str(e)}")
@@ -348,6 +375,11 @@ class QueueConsumer:
             except pika.exceptions.StreamLostError:
                 # Connection already lost, that's okay
                 logger.debug("Connection already lost when stopping")
+            except pika.exceptions.ChannelClosedByBroker as e:
+                # Channel was closed by broker (e.g., PRECONDITION_FAILED - unknown delivery tag)
+                # This can happen when messages have already been acknowledged and we try to stop
+                # It's safe to ignore - the channel is already closed
+                logger.debug(f"Channel closed by broker when stopping: {str(e)}")
             except Exception as e:
                 logger.debug(f"Error stopping channel: {str(e)}")
         else:
@@ -358,6 +390,11 @@ class QueueConsumer:
                     if channel and channel.is_open:
                         channel.stop_consuming()
                         logger.debug("Stopped consuming on fallback channel")
+            except pika.exceptions.ChannelClosedByBroker as e:
+                # Channel was closed by broker - safe to ignore
+                logger.debug(
+                    f"Channel closed by broker when stopping (fallback): {str(e)}"
+                )
             except Exception as e:
                 logger.debug(f"Error stopping consumer (fallback): {str(e)}")
 

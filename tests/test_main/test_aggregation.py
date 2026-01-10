@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 import os
 import json
+from unittest.mock import patch, AsyncMock
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
@@ -50,24 +51,47 @@ def test_fedavg_aggregation():
         diff1[name] = weights1[name] - torch.zeros_like(weights1[name])
         diff2[name] = weights2[name] - torch.zeros_like(weights2[name])
 
+    # Serialize diffs
+    diff1_str = serialize_diff(diff1)
+    diff2_str = serialize_diff(diff2)
+
+    # Create mock IPFS CID mapping
+    cid1 = "QmTestClient0"
+    cid2 = "QmTestClient1"
+    ipfs_data = {
+        cid1: diff1_str.encode("utf-8"),
+        cid2: diff2_str.encode("utf-8"),
+    }
+
     client_updates = [
         {
             "client_id": "client_0",
             "iteration": 1,
-            "weight_diff": serialize_diff(diff1),
+            "weight_diff_cid": cid1,
             "metrics": {"loss": 0.5, "accuracy": 90.0, "samples": 100},
         },
         {
             "client_id": "client_1",
             "iteration": 1,
-            "weight_diff": serialize_diff(diff2),
+            "weight_diff_cid": cid2,
             "metrics": {"loss": 0.6, "accuracy": 85.0, "samples": 200},
         },
     ]
 
+    # Mock IPFS client
+    async def mock_get_bytes(cid: str):
+        return ipfs_data[cid]
+
     # Test aggregation
     worker = AggregationWorker()
-    aggregated = worker._fedavg_aggregate(client_updates)
+    with patch("main_service.workers.aggregation_worker.IPFSClient") as mock_ipfs_class:
+        mock_client = AsyncMock()
+        mock_client.get_bytes = AsyncMock(side_effect=mock_get_bytes)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_ipfs_class.return_value = mock_client
+
+        aggregated = worker._fedavg_aggregate(client_updates)
 
     assert len(aggregated) > 0, "Aggregated weights should not be empty"
     print(f"✓ Aggregated {len(aggregated)} weight parameters")
@@ -103,34 +127,57 @@ def test_fedavg_weighted_averaging():
         diff1[name] = weights1[name] - torch.zeros_like(weights1[name])
         diff2[name] = weights2[name] - torch.zeros_like(weights2[name])
 
+    # Serialize diffs
+    diff1_str = serialize_diff(diff1)
+    diff2_str = serialize_diff(diff2)
+
+    # Create mock IPFS CID mapping
+    cid1 = "QmTestClient0"
+    cid2 = "QmTestClient1"
+    ipfs_data = {
+        cid1: diff1_str.encode("utf-8"),
+        cid2: diff2_str.encode("utf-8"),
+    }
+
     # Client 1 has 100 samples, Client 2 has 200 samples
     # Client 2 should have 2x weight in aggregation
     client_updates = [
         {
             "client_id": "client_0",
             "iteration": 1,
-            "weight_diff": serialize_diff(diff1),
+            "weight_diff_cid": cid1,
             "metrics": {"samples": 100},
         },
         {
             "client_id": "client_1",
             "iteration": 1,
-            "weight_diff": serialize_diff(diff2),
+            "weight_diff_cid": cid2,
             "metrics": {"samples": 200},
         },
     ]
 
+    # Mock IPFS client
+    async def mock_get_bytes(cid: str):
+        return ipfs_data[cid]
+
     worker = AggregationWorker()
-    aggregated = worker._fedavg_aggregate(client_updates)
+    with patch("main_service.workers.aggregation_worker.IPFSClient") as mock_ipfs_class:
+        mock_client = AsyncMock()
+        mock_client.get_bytes = AsyncMock(side_effect=mock_get_bytes)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_ipfs_class.return_value = mock_client
 
-    # Verify aggregation worked
-    assert len(aggregated) > 0
-    print("✓ Weighted averaging completed")
+        aggregated = worker._fedavg_aggregate(client_updates)
 
-    # Test with explicit sample counts
-    aggregated2 = worker._fedavg_aggregate(client_updates, sample_counts=[100, 200])
-    assert len(aggregated2) > 0
-    print("✓ Explicit sample counts work")
+        # Verify aggregation worked
+        assert len(aggregated) > 0
+        print("✓ Weighted averaging completed")
+
+        # Test with explicit sample counts (still inside the patch context)
+        aggregated2 = worker._fedavg_aggregate(client_updates, sample_counts=[100, 200])
+        assert len(aggregated2) > 0
+        print("✓ Explicit sample counts work")
 
     print("=" * 60)
     print("✓ Test PASSED")
@@ -151,17 +198,35 @@ def test_fedavg_single_client():
     for name in weights:
         diff[name] = weights[name] - torch.zeros_like(weights[name])
 
+    # Serialize diff
+    diff_str = serialize_diff(diff)
+
+    # Create mock IPFS CID
+    cid = "QmTestClient0"
+    ipfs_data = {cid: diff_str.encode("utf-8")}
+
     client_updates = [
         {
             "client_id": "client_0",
             "iteration": 1,
-            "weight_diff": serialize_diff(diff),
+            "weight_diff_cid": cid,
             "metrics": {"samples": 100},
         }
     ]
 
+    # Mock IPFS client
+    async def mock_get_bytes(cid: str):
+        return ipfs_data[cid]
+
     worker = AggregationWorker()
-    aggregated = worker._fedavg_aggregate(client_updates)
+    with patch("main_service.workers.aggregation_worker.IPFSClient") as mock_ipfs_class:
+        mock_client = AsyncMock()
+        mock_client.get_bytes = AsyncMock(side_effect=mock_get_bytes)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_ipfs_class.return_value = mock_client
+
+        aggregated = worker._fedavg_aggregate(client_updates)
 
     # With single client, should return diff as-is
     assert len(aggregated) > 0
@@ -215,50 +280,75 @@ def test_fedavg_client_exclusion():
         diff2[name] = weights2[name] - torch.zeros_like(weights2[name])
         diff3[name] = weights3[name] - torch.zeros_like(weights3[name])
 
+    # Serialize diffs
+    diff1_str = serialize_diff(diff1)
+    diff2_str = serialize_diff(diff2)
+    diff3_str = serialize_diff(diff3)
+
+    # Create mock IPFS CID mapping
+    cid1 = "QmTestClient0"
+    cid2 = "QmTestClient1"
+    cid3 = "QmTestClient2"
+    ipfs_data = {
+        cid1: diff1_str.encode("utf-8"),
+        cid2: diff2_str.encode("utf-8"),
+        cid3: diff3_str.encode("utf-8"),
+    }
+
     client_updates = [
         {
             "client_id": "client_0",
             "iteration": 1,
-            "weight_diff": serialize_diff(diff1),
+            "weight_diff_cid": cid1,
             "metrics": {"samples": 100},
         },
         {
             "client_id": "client_1",
             "iteration": 1,
-            "weight_diff": serialize_diff(diff2),
+            "weight_diff_cid": cid2,
             "metrics": {"samples": 200},
         },
         {
             "client_id": "client_2",
             "iteration": 1,
-            "weight_diff": serialize_diff(diff3),
+            "weight_diff_cid": cid3,
             "metrics": {"samples": 150},
         },
     ]
 
+    # Mock IPFS client
+    async def mock_get_bytes(cid: str):
+        return ipfs_data[cid]
+
     worker = AggregationWorker()
+    with patch("main_service.workers.aggregation_worker.IPFSClient") as mock_ipfs_class:
+        mock_client = AsyncMock()
+        mock_client.get_bytes = AsyncMock(side_effect=mock_get_bytes)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_ipfs_class.return_value = mock_client
 
-    # Aggregate all clients
-    aggregated_all = worker._fedavg_aggregate(client_updates)
+        # Aggregate all clients
+        aggregated_all = worker._fedavg_aggregate(client_updates)
 
-    # Exclude client_1
-    aggregated_excluded = worker._fedavg_aggregate(
-        client_updates, exclude_clients=["client_1"]
-    )
-
-    assert len(aggregated_all) > 0
-    assert len(aggregated_excluded) > 0
-    print("✓ Client exclusion works")
-
-    # Verify excluded client is not in result
-    # (aggregated result should be different)
-    print("✓ Excluded client removed from aggregation")
-
-    # Test excluding all clients (should raise error)
-    with pytest.raises(ValueError, match="All clients were excluded"):
-        worker._fedavg_aggregate(
-            client_updates, exclude_clients=["client_0", "client_1", "client_2"]
+        # Exclude client_1
+        aggregated_excluded = worker._fedavg_aggregate(
+            client_updates, exclude_clients=["client_1"]
         )
+
+        assert len(aggregated_all) > 0
+        assert len(aggregated_excluded) > 0
+        print("✓ Client exclusion works")
+
+        # Verify excluded client is not in result
+        # (aggregated result should be different)
+        print("✓ Excluded client removed from aggregation")
+
+        # Test excluding all clients (should raise error)
+        with pytest.raises(ValueError, match="All clients were excluded"):
+            worker._fedavg_aggregate(
+                client_updates, exclude_clients=["client_0", "client_1", "client_2"]
+            )
 
     print("✓ Excluding all clients correctly raises error")
 

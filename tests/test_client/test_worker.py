@@ -16,7 +16,7 @@ if "RABBITMQ_HOST" not in os.environ:
 import pytest
 import pika
 import torch
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, AsyncMock, patch
 from shared.queue.publisher import QueuePublisher
 from shared.models.task import Task, TaskType, TrainTaskPayload, TaskMetadata
 from client_service.worker import ClientWorker
@@ -69,9 +69,18 @@ def test_worker_train_task():
     mock_publisher.publish_dict = Mock(return_value=None)
     worker.publisher = mock_publisher
 
-    # Process task directly (for testing, not using consume loop)
-    print("Processing task...")
-    success = worker._handle_train_task(test_task)
+    # Mock IPFS client to avoid connection errors
+    mock_cid = "QmTestWeightDiff123"
+    with patch("shared.storage.ipfs_client.IPFSClient") as mock_ipfs_class:
+        mock_client = AsyncMock()
+        mock_client.add_bytes = AsyncMock(return_value=mock_cid)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_ipfs_class.return_value = mock_client
+
+        # Process task directly (for testing, not using consume loop)
+        print("Processing task...")
+        success = worker._handle_train_task(test_task)
 
     # Verify that publish_dict was called (worker tried to publish the update)
     assert (

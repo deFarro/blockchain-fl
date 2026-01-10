@@ -87,11 +87,17 @@ async def list_models(
             if not isinstance(metadata, dict):
                 metadata = {}
 
-            # Extract accuracy from validation_metrics if available
-            validation_metrics = metadata.get("validation_metrics")
+            # Extract accuracy from validation_metrics
+            # ValidationMetrics can be at top level (from chaincode) or in metadata (fallback)
+            validation_metrics = bv.get("validation_metrics") or metadata.get(
+                "validation_metrics"
+            )
             accuracy = None
             if isinstance(validation_metrics, dict):
                 accuracy = validation_metrics.get("accuracy")
+            # Also check if accuracy is directly in validation_metrics as a number
+            elif validation_metrics is None and "accuracy" in bv:
+                accuracy = bv.get("accuracy")
 
             version = ModelVersionResponse(
                 version_id=bv.get("version_id", ""),
@@ -114,7 +120,8 @@ async def list_models(
                 ),
                 ipfs_cid=metadata.get("ipfs_cid"),
                 timestamp=bv.get("timestamp"),
-                validation_status=metadata.get("validation_status"),
+                validation_status=bv.get("validation_status")
+                or metadata.get("validation_status"),
                 accuracy=accuracy,
                 metadata=metadata,
             )
@@ -166,18 +173,34 @@ async def get_model(
             provenance = await blockchain_client.get_model_provenance(version_id)
 
         # Parse provenance data
+        metadata = provenance.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        # Extract accuracy from validation_metrics
+        # ValidationMetrics can be at top level (from chaincode) or in metadata (fallback)
+        validation_metrics = provenance.get("validation_metrics") or metadata.get(
+            "validation_metrics"
+        )
+        accuracy = None
+        if isinstance(validation_metrics, dict):
+            accuracy = validation_metrics.get("accuracy")
+
         return ModelVersionResponse(
             version_id=provenance.get("version_id", version_id),
             parent_version_id=provenance.get("parent_version_id"),
             hash=provenance.get("hash", ""),
-            iteration=provenance.get("metadata", {}).get("iteration"),
-            num_clients=provenance.get("metadata", {}).get("num_clients"),
-            client_ids=provenance.get("metadata", {}).get("client_ids"),
-            ipfs_cid=provenance.get("metadata", {}).get("ipfs_cid"),
+            iteration=metadata.get("iteration") or provenance.get("iteration"),
+            num_clients=metadata.get("num_clients") or provenance.get("num_clients"),
+            client_ids=metadata.get("client_ids") or provenance.get("client_ids"),
+            ipfs_cid=metadata.get("ipfs_cid")
+            or provenance.get("ipfs_cid")
+            or provenance.get("ipfsCID"),
             timestamp=provenance.get("timestamp"),
-            validation_status=provenance.get("validation_status"),
-            accuracy=provenance.get("validation_metrics", {}).get("accuracy"),
-            metadata=provenance.get("metadata", {}),
+            validation_status=provenance.get("validation_status")
+            or metadata.get("validation_status"),
+            accuracy=accuracy,
+            metadata=metadata,
         )
     except Exception as e:
         logger.error(
@@ -395,7 +418,7 @@ async def start_training(
                 )
 
                 logger.info(
-                    f"✓ Registered initial model version on blockchain: "
+                    f"Registered initial model version on blockchain: "
                     f"version_id={initial_version_id}, cid={initial_weights_cid}, "
                     f"tx_id={transaction_id}"
                 )

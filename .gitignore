@@ -55,8 +55,6 @@ logs/
 Thumbs.db
 
 # Project specific
-Proposal.pdf
-IMPLEMENTATION_PLAN.md
 network.json
 *.key
 *.crt

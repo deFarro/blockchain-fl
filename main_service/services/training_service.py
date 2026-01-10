@@ -49,5 +49,5 @@ async def prepopulate_initial_weights() -> str:
     async with IPFSClient() as ipfs_client:
         cid = await ipfs_client.add_bytes(encrypted_weights, pin=True)
 
-    logger.info(f"✓ Initial weights uploaded to IPFS: CID={cid}")
+    logger.info(f"Initial weights uploaded to IPFS: CID={cid}")
     return str(cid)

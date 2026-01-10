@@ -117,7 +117,7 @@ class DecisionWorker:
             self.state.best_checkpoint_cid = validation_result.get("ipfs_cid")
             self.state.patience_counter = 0  # Reset patience
             logger.info(
-                f"✓ New best accuracy: {current_accuracy:.2f}% "
+                f"New best accuracy: {current_accuracy:.2f}% "
                 f"(version: {self.state.best_checkpoint_version})"
             )
             return False, None
@@ -231,7 +231,7 @@ class DecisionWorker:
             task=train_task, queue_name="train_queue", use_fanout=True
         )
         logger.info(
-            f"✓ Published universal TRAIN task for iteration {iteration} via fanout exchange (all clients will receive simultaneously)"
+            f"Published universal TRAIN task for iteration {iteration} via fanout exchange (all clients will receive simultaneously)"
         )
 
     def _publish_rollback_task(
@@ -262,7 +262,7 @@ class DecisionWorker:
         )
 
         self.publisher.publish_task(task=rollback_task, queue_name="rollback_queue")
-        logger.info(f"✓ Published ROLLBACK task to version {target_version_id}")
+        logger.info(f"Published ROLLBACK task to version {target_version_id}")
 
     def _publish_training_complete_task(
         self, validation_result: Dict[str, Any], completion_reason: str
@@ -324,9 +324,7 @@ class DecisionWorker:
         self.publisher.publish_task(
             task=complete_task, queue_name="training_complete_queue"
         )
-        logger.info(
-            f"✓ Published TRAINING_COMPLETE task for version {model_version_id}"
-        )
+        logger.info(f"Published TRAINING_COMPLETE task for version {model_version_id}")
 
     def _handle_decision_task(self, task: Task) -> bool:
         """
@@ -353,11 +351,26 @@ class DecisionWorker:
             metrics = validation_result.get("metrics", {})
             current_accuracy = metrics.get("accuracy", 0.0)
 
+            # Get iteration from validation result (from model version metadata)
+            # If not present, increment current_iteration as fallback
+            validated_iteration = validation_result.get("iteration")
+            if validated_iteration is not None:
+                # Use iteration from validation result
+                self.state.current_iteration = validated_iteration
+                logger.debug(
+                    f"Using iteration {validated_iteration} from validation result"
+                )
+            else:
+                # Fallback: increment current iteration
+                self.state.current_iteration += 1
+                logger.warning(
+                    "Iteration not found in validation result, incrementing current_iteration"
+                )
+
             # Update state
             if self.state.training_start_time is None:
                 self.state.training_start_time = time.time()
 
-            self.state.current_iteration += 1
             self.state.accuracy_history.append(current_accuracy)
 
             logger.info(
@@ -420,7 +433,7 @@ class DecisionWorker:
                 )
 
                 logger.info(
-                    f"✓ Rollback completed. Continuing training from iteration {self.state.current_iteration}"
+                    f"Rollback completed. Continuing training from iteration {self.state.current_iteration}"
                 )
                 return True
 
@@ -439,17 +452,19 @@ class DecisionWorker:
                     validation_result, completion_reason
                 )
                 # Update shared state
-                logger.info(f"✓ Training completed: {completion_reason}")
+                logger.info(f"Training completed: {completion_reason}")
                 return True
 
             # Continue training - publish TRAIN tasks for next iteration
+            next_iteration = self.state.current_iteration + 1
             self._publish_train_tasks(
-                iteration=self.state.current_iteration,
+                iteration=next_iteration,
                 weights_cid=validation_result.get("ipfs_cid"),
             )
 
             logger.info(
-                f"✓ Training continues. Published TRAIN tasks for iteration {self.state.current_iteration}"
+                f"Training continues. Published TRAIN tasks for iteration {next_iteration} "
+                f"(validated iteration {self.state.current_iteration})"
             )
             return True
 

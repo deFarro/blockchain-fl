@@ -168,17 +168,43 @@ class ClientWorker:
                 f"accuracy={metrics['accuracy']:.2f}%"
             )
 
-            # Serialize weight diff to bytes (for now, JSON)
-            # TODO: Encrypt and upload to IPFS
+            # Serialize weight diff to bytes
             weight_diff_bytes = self.trainer.get_model().weights_to_bytes()
-            weight_diff_str = weight_diff_bytes.decode("utf-8")
+            
+            # Upload weight diff to IPFS to avoid RabbitMQ frame size limits
+            # Weight diffs can be very large (several MB), so we store them in IPFS
+            # and only send the CID through RabbitMQ
+            logger.info(
+                f"Uploading weight diff to IPFS (size: {len(weight_diff_bytes)} bytes) "
+                f"for iteration {payload.iteration}"
+            )
+            
+            # Upload to IPFS (synchronous wrapper for async operation)
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                # No event loop in current thread, create new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            async def upload_to_ipfs():
+                from shared.storage.ipfs_client import IPFSClient
+                async with IPFSClient() as ipfs_client:
+                    cid = await ipfs_client.add_bytes(weight_diff_bytes, pin=True)
+                    return cid
+            
+            weight_diff_cid = loop.run_until_complete(upload_to_ipfs())
+            logger.info(
+                f"Uploaded weight diff to IPFS: CID={weight_diff_cid} "
+                f"(size: {len(weight_diff_bytes)} bytes)"
+            )
 
             # Create client update payload (simple dict, not a Task)
             # The aggregation worker will collect these and create an AGGREGATE task
             client_update = {
                 "client_id": self.instance_id,  # Use instance_id as the client identifier
                 "iteration": payload.iteration,
-                "weight_diff": weight_diff_str,  # Serialized as JSON string
+                "weight_diff_cid": weight_diff_cid,  # IPFS CID instead of full diff
                 "metrics": metrics,
                 "task_id": task.task_id,  # Reference to original task
                 "model_version_id": task.model_version_id,

@@ -173,12 +173,16 @@ def test_storage_worker_handle_task():
     mock_publisher = Mock()
     worker.publisher = mock_publisher
 
+    # Create mock IPFS CID and data
+    aggregated_diff_cid = "QmTestAggregatedDiff123"
+    ipfs_data = {aggregated_diff_cid: aggregated_diff_str.encode("utf-8")}
+
     # Create STORAGE_WRITE task
     storage_task = Task(
         task_id="storage-test-001",
         task_type=TaskType.STORAGE_WRITE,
         payload=StorageWriteTaskPayload(
-            aggregated_diff=aggregated_diff_str,
+            aggregated_diff_cid=aggregated_diff_cid,
             blockchain_hash=expected_hash,
             model_version_id="version_1",
         ).model_dump(),
@@ -192,46 +196,47 @@ def test_storage_worker_handle_task():
 
     # Test handling task
     # Note: _handle_storage_task uses run_until_complete, which doesn't work
-    # when there's already a running event loop. We'll test it directly with
-    # the async method instead.
-    async def run_test():
-        with patch("main_service.workers.storage_worker.IPFSClient") as mock_ipfs_class:
-            mock_client = AsyncMock()
-            mock_client.add_bytes = AsyncMock(return_value=mock_cid)
-            mock_client.pin_ls = AsyncMock(
-                return_value={"Keys": {mock_cid: {"Type": "recursive"}}}
-            )
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_ipfs_class.return_value = mock_client
+    # when there's already a running event loop. We need to test it in a sync context
+    # without an existing event loop, or call the async method directly.
+    with patch("main_service.workers.storage_worker.IPFSClient") as mock_ipfs_class:
+        mock_client = AsyncMock()
+        # Mock get_bytes to return the unencrypted diff from IPFS
+        mock_client.get_bytes = AsyncMock(side_effect=lambda cid: ipfs_data[cid])
+        # Mock add_bytes to return the encrypted CID
+        mock_client.add_bytes = AsyncMock(return_value=mock_cid)
+        mock_client.pin_ls = AsyncMock(
+            return_value={"Keys": {mock_cid: {"Type": "recursive"}}}
+        )
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_ipfs_class.return_value = mock_client
 
-            # Call the async method directly instead of the sync wrapper
-            cid = await worker._encrypt_and_store(
-                aggregated_diff_str, expected_hash, "version_1"
-            )
+        # Use the handler directly - it will download from IPFS, encrypt, and re-upload
+        # This works because we're not in an async context, so run_until_complete can create a new loop
+        success = worker._handle_storage_task(storage_task)
 
-            # Manually publish validate task to test the full flow
-            worker._publish_validate_task("version_1", cid, "version_0")
+        assert success, "Task handling should succeed"
+        print("✓ Task handling successful")
 
-            assert cid == mock_cid
-            print("✓ Task handling successful")
+        # Verify IPFS get_bytes was called to download the diff
+        assert mock_client.get_bytes.called
+        get_call_args = mock_client.get_bytes.call_args
+        assert get_call_args[0][0] == aggregated_diff_cid
 
-            # Verify IPFS was called (with encrypted diff)
-            # Note: We can't verify the exact encrypted value since AES-GCM is non-deterministic
-            # But we can verify it was called with some encrypted bytes
-            assert mock_client.add_bytes.called
-            call_args = mock_client.add_bytes.call_args
-            assert call_args[1]["pin"] is True
-            assert isinstance(call_args[0][0], bytes)
+        # Verify IPFS add_bytes was called (with encrypted diff)
+        # Note: We can't verify the exact encrypted value since AES-GCM is non-deterministic
+        # But we can verify it was called with some encrypted bytes
+        assert mock_client.add_bytes.called
+        call_args = mock_client.add_bytes.call_args
+        assert call_args[1]["pin"] is True
+        assert isinstance(call_args[0][0], bytes)
 
-            # Verify VALIDATE task was published
-            assert mock_publisher.publish_task.called
-            published_task = mock_publisher.publish_task.call_args[0][0]
-            assert published_task.task_type == TaskType.VALIDATE
-            assert published_task.payload["ipfs_cid"] == mock_cid
-            print("✓ VALIDATE task published correctly")
-
-    asyncio.run(run_test())
+        # Verify VALIDATE task was published
+        assert mock_publisher.publish_task.called
+        published_task = mock_publisher.publish_task.call_args[0][0]
+        assert published_task.task_type == TaskType.VALIDATE
+        assert published_task.payload["ipfs_cid"] == mock_cid
+        print("✓ VALIDATE task published correctly")
 
     print("=" * 60)
     print("✓ Test PASSED")
@@ -257,12 +262,16 @@ def test_storage_worker_hash_mismatch():
     mock_publisher = Mock()
     worker.publisher = mock_publisher
 
+    # Create mock IPFS CID and data
+    aggregated_diff_cid = "QmTestAggregatedDiff123"
+    ipfs_data = {aggregated_diff_cid: aggregated_diff_str.encode("utf-8")}
+
     # Create STORAGE_WRITE task with wrong hash
     storage_task = Task(
         task_id="storage-test-002",
         task_type=TaskType.STORAGE_WRITE,
         payload=StorageWriteTaskPayload(
-            aggregated_diff=aggregated_diff_str,
+            aggregated_diff_cid=aggregated_diff_cid,
             blockchain_hash=wrong_hash,
             model_version_id="version_1",
         ).model_dump(),
@@ -271,15 +280,25 @@ def test_storage_worker_hash_mismatch():
         parent_version_id="version_0",
     )
 
-    # Test that task handling fails on hash mismatch
-    success = worker._handle_storage_task(storage_task)
+    # Mock IPFS client
+    with patch("main_service.workers.storage_worker.IPFSClient") as mock_ipfs_class:
+        mock_client = AsyncMock()
+        # Mock get_bytes to return the unencrypted diff from IPFS
+        mock_client.get_bytes = AsyncMock(side_effect=lambda cid: ipfs_data[cid])
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_ipfs_class.return_value = mock_client
 
-    assert not success, "Task handling should fail on hash mismatch"
-    print("✓ Hash mismatch correctly causes task failure")
+        # Test that task handling fails on hash mismatch
+        # This works because we're not in an async context, so run_until_complete can create a new loop
+        success = worker._handle_storage_task(storage_task)
 
-    # Verify VALIDATE task was NOT published
-    assert not mock_publisher.publish_task.called
-    print("✓ VALIDATE task not published on error")
+        assert not success, "Task handling should fail on hash mismatch"
+        print("✓ Hash mismatch correctly causes task failure")
+
+        # Verify VALIDATE task was NOT published
+        assert not mock_publisher.publish_task.called
+        print("✓ VALIDATE task not published on error")
 
     print("=" * 60)
     print("✓ Test PASSED")

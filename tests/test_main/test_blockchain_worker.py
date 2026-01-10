@@ -222,13 +222,13 @@ def test_publish_storage_task():
     mock_publisher = Mock()
     worker.publisher = mock_publisher
 
-    aggregated_diff_str = '{"layer1.weight": [1.0, 2.0]}'
+    aggregated_diff_cid = "QmTestAggregatedDiff123"
     blockchain_hash = "test_hash_12345"
     model_version_id = "model_v1_1234567890_abc123"
     parent_version_id = None
 
     worker._publish_storage_task(
-        aggregated_diff_str=aggregated_diff_str,
+        aggregated_diff_cid=aggregated_diff_cid,
         blockchain_hash=blockchain_hash,
         model_version_id=model_version_id,
         parent_version_id=parent_version_id,
@@ -250,7 +250,7 @@ def test_publish_storage_task():
     assert published_task.parent_version_id == parent_version_id
 
     # Check payload
-    assert published_task.payload["aggregated_diff"] == aggregated_diff_str
+    assert published_task.payload["aggregated_diff_cid"] == aggregated_diff_cid
     assert published_task.payload["blockchain_hash"] == blockchain_hash
     assert published_task.payload["model_version_id"] == model_version_id
 
@@ -274,12 +274,17 @@ def test_handle_blockchain_write_task():
     mock_publisher = Mock()
     worker.publisher = mock_publisher
 
+    # Create mock IPFS data
+    aggregated_diff_str = '{"layer1.weight": [1.0, 2.0]}'
+    aggregated_diff_cid = "QmTestAggregatedDiff123"
+    ipfs_data = {aggregated_diff_cid: aggregated_diff_str.encode("utf-8")}
+
     # Create BLOCKCHAIN_WRITE task
     task = Task(
         task_id="blockchain-test-001",
         task_type=TaskType.BLOCKCHAIN_WRITE,
         payload={
-            "aggregated_diff": '{"layer1.weight": [1.0, 2.0]}',
+            "aggregated_diff_cid": aggregated_diff_cid,
             "iteration": 1,
             "num_clients": 2,
             "client_ids": ["client_0", "client_1"],
@@ -302,27 +307,18 @@ def test_handle_blockchain_write_task():
         side_effect=mock_process_blockchain_write
     )
 
-    # Run async method in sync context
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        # If loop is already running, use run_until_complete
-        result = loop.run_until_complete(
-            mock_process_blockchain_write(
-                aggregated_diff_str=task.payload["aggregated_diff"],
-                iteration=task.payload["iteration"],
-                num_clients=task.payload["num_clients"],
-                client_ids=task.payload["client_ids"],
-            )
-        )
-        # Manually call publish
-        worker._publish_storage_task(
-            aggregated_diff_str=task.payload["aggregated_diff"],
-            blockchain_hash=result["blockchain_hash"],
-            model_version_id=result["model_version_id"],
-            parent_version_id=result["parent_version_id"],
-        )
-        success = True
-    else:
+    # Mock IPFS client
+    async def mock_get_bytes(cid: str):
+        return ipfs_data[cid]
+
+    from unittest.mock import patch
+    with patch("main_service.workers.blockchain_worker.IPFSClient") as mock_ipfs_class:
+        mock_client = AsyncMock()
+        mock_client.get_bytes = AsyncMock(side_effect=mock_get_bytes)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_ipfs_class.return_value = mock_client
+
         # Use the handler directly
         success = worker._handle_blockchain_write_task(task)
 
@@ -374,12 +370,17 @@ def test_handle_blockchain_write_task_error():
 
     worker = BlockchainWorker()
 
+    # Create mock IPFS data
+    aggregated_diff_str = '{"layer1.weight": [1.0, 2.0]}'
+    aggregated_diff_cid = "QmTestAggregatedDiff123"
+    ipfs_data = {aggregated_diff_cid: aggregated_diff_str.encode("utf-8")}
+
     # Create task
     task = Task(
         task_id="blockchain-test-003",
         task_type=TaskType.BLOCKCHAIN_WRITE,
         payload={
-            "aggregated_diff": '{"layer1.weight": [1.0, 2.0]}',
+            "aggregated_diff_cid": aggregated_diff_cid,
             "iteration": 1,
             "num_clients": 2,
             "client_ids": ["client_0"],
@@ -387,17 +388,29 @@ def test_handle_blockchain_write_task_error():
         metadata=TaskMetadata(source="test"),
     )
 
+    # Mock IPFS client
+    async def mock_get_bytes(cid: str):
+        return ipfs_data[cid]
+
     # Mock async method to raise error
     async def mock_process_error(*args, **kwargs):
         raise Exception("Blockchain service error")
 
     worker._process_blockchain_write = AsyncMock(side_effect=mock_process_error)
 
-    # Run in sync context
-    loop = asyncio.get_event_loop()
-    if not loop.is_running():
-        success = worker._handle_blockchain_write_task(task)
-        assert not success
+    # Mock IPFS client
+    with patch("main_service.workers.blockchain_worker.IPFSClient") as mock_ipfs_class:
+        mock_client = AsyncMock()
+        mock_client.get_bytes = AsyncMock(side_effect=mock_get_bytes)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_ipfs_class.return_value = mock_client
+
+        # Run in sync context
+        loop = asyncio.get_event_loop()
+        if not loop.is_running():
+            success = worker._handle_blockchain_write_task(task)
+            assert not success
 
     print("✓ Task with error correctly handled")
     print("=" * 60)

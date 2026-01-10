@@ -23,8 +23,25 @@ def main():
     )
     logger.info("=" * 60)
 
-    # Create worker
+    # Create worker (this generates the instance_id)
     worker = ClientWorker()
+
+    # Prefetch training dataset on startup using the worker's instance_id
+    logger.info("Prefetching training dataset on startup...")
+    try:
+        train_loader, train_dataset = worker.trainer.load_dataset(
+            instance_id=worker.instance_id
+        )
+        logger.info(
+            f"Training dataset prefetched successfully: "
+            f"{len(train_dataset)} samples (instance_id={worker.instance_id})"
+        )
+    except Exception as e:
+        logger.warning(
+            f"Failed to prefetch training dataset: {e}. "
+            "It will be loaded when training starts.",
+            exc_info=True,
+        )
 
     # Set up signal handlers for graceful shutdown
     def signal_handler(sig, frame):

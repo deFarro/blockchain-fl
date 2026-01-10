@@ -38,10 +38,10 @@ clean:
 
 # Test targets (local development)
 test: test-shared test-main test-client test-blockchain
-	@echo "✓ All tests passed"
+	@echo "All tests passed"
 
 test-all: test test-queue test-integration test-blockchain
-	@echo "✓ All tests including integration tests passed"
+	@echo "All tests including integration tests passed"
 
 test-integration:
 	@echo "Running integration tests..."

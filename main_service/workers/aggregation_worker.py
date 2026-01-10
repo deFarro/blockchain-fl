@@ -1,5 +1,6 @@
 """Aggregation worker that implements FedAvg algorithm."""
 
+import asyncio
 import json
 import time
 import threading
@@ -17,6 +18,7 @@ from shared.models.task import Task, TaskType, TaskMetadata, AggregateTaskPayloa
 from shared.logger import setup_logger
 from shared.monitoring.metrics import get_metrics_collector
 from shared.models.model import SimpleCNN
+from shared.storage.ipfs_client import IPFSClient
 
 logger = setup_logger(__name__)
 
@@ -61,6 +63,21 @@ class AggregationWorker:
 
         return weight_diff
 
+    async def _download_weight_diff_from_ipfs(self, cid: str) -> str:
+        """
+        Download weight diff from IPFS.
+
+        Args:
+            cid: IPFS CID of weight diff
+
+        Returns:
+            Weight diff as JSON string
+        """
+        async with IPFSClient() as ipfs_client:
+            weight_diff_bytes: bytes = await ipfs_client.get_bytes(cid)
+            weight_diff_str: str = weight_diff_bytes.decode("utf-8")
+            return weight_diff_str
+
     def _fedavg_aggregate(
         self,
         client_updates: List[Dict[str, Any]],
@@ -71,7 +88,7 @@ class AggregationWorker:
         Aggregate client weight updates using Federated Averaging (FedAvg).
 
         Args:
-            client_updates: List of client updates, each containing 'weight_diff' (JSON string)
+            client_updates: List of client updates, each containing 'weight_diff_cid' (IPFS CID)
             sample_counts: Optional list of sample counts per client (for weighted averaging)
             exclude_clients: Optional list of client IDs to exclude from aggregation.
                             Only used when re-aggregating after regression diagnosis.
@@ -86,7 +103,29 @@ class AggregationWorker:
         if len(client_updates) == 1:
             # Single client, no aggregation needed
             logger.info("Only one client update, returning as-is")
-            return self._deserialize_weight_diff(client_updates[0]["weight_diff"])
+            # Handle IPFS CID or direct weight_diff
+            update = client_updates[0]
+            weight_diff_cid = update.get("weight_diff_cid")
+
+            # Create event loop for async IPFS operations if needed
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            if not weight_diff_cid:
+                raise ValueError(
+                    f"Missing 'weight_diff_cid' in client update from {update.get('client_id', 'unknown')}. "
+                    f"Only IPFS CIDs should be sent through RabbitMQ."
+                )
+
+            # Download from IPFS
+            weight_diff_str = loop.run_until_complete(
+                self._download_weight_diff_from_ipfs(weight_diff_cid)
+            )
+
+            return self._deserialize_weight_diff(weight_diff_str)
 
         # Filter excluded clients only if explicitly provided (for re-aggregation after diagnosis)
         if exclude_clients:
@@ -106,10 +145,37 @@ class AggregationWorker:
                     "All clients were excluded! Cannot aggregate with zero clients."
                 )
 
-        # Deserialize all weight diffs
+        # Deserialize all weight diffs - download from IPFS using CIDs
         weight_diffs = []
+
+        # Create event loop for async IPFS operations
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # No event loop in current thread, create new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
         for update in client_updates:
-            weight_diff = self._deserialize_weight_diff(update["weight_diff"])
+            weight_diff_cid = update.get("weight_diff_cid")
+            if not weight_diff_cid:
+                client_id = update.get("client_id", "unknown")
+                raise ValueError(
+                    f"Missing 'weight_diff_cid' in client update from {client_id}. "
+                    f"Only IPFS CIDs should be sent through RabbitMQ."
+                )
+
+            # Download from IPFS
+            logger.debug(f"Downloading weight diff from IPFS: CID={weight_diff_cid}")
+            weight_diff_str = loop.run_until_complete(
+                self._download_weight_diff_from_ipfs(weight_diff_cid)
+            )
+            logger.debug(
+                f"Downloaded weight diff from IPFS: CID={weight_diff_cid}, "
+                f"size={len(weight_diff_str.encode('utf-8'))} bytes"
+            )
+
+            weight_diff = self._deserialize_weight_diff(weight_diff_str)
             weight_diffs.append(weight_diff)
 
         # Get sample counts (use metrics['samples'] if available, otherwise equal weights)
@@ -331,19 +397,53 @@ class AggregationWorker:
                         return
 
                     # Message matches current iteration - queue it for processing
+                    # Check if message has old format (weight_diff instead of weight_diff_cid)
+                    # Old format messages are too large and should be rejected
+                    if "weight_diff" in message and "weight_diff_cid" not in message:
+                        logger.warning(
+                            f"Received old-format message from {client_id} with direct weight_diff. "
+                            f"This message is too large for RabbitMQ. Rejecting without requeue."
+                        )
+                        # Check if channel is still open before nacking
+                        if channel and delivery_tag and channel.is_open:
+                            try:
+                                # Reject without requeue - old format messages should not be processed
+                                channel.basic_nack(
+                                    delivery_tag=delivery_tag, requeue=False
+                                )
+                            except Exception as e:
+                                logger.debug(
+                                    f"Failed to nack old-format message (channel may be closed): {e}"
+                                )
+                        return
+
                     try:
                         message_queue.put(message, timeout=1.0)
                         logger.debug(f"Message queued successfully from {client_id}")
                         # Acknowledge message only after successfully queuing
-                        if channel and delivery_tag:
-                            channel.basic_ack(delivery_tag=delivery_tag)
+                        # Check if channel is still open before acking
+                        if channel and delivery_tag and channel.is_open:
+                            try:
+                                channel.basic_ack(delivery_tag=delivery_tag)
+                            except Exception as e:
+                                logger.debug(
+                                    f"Failed to ack message (channel may be closed): {e}"
+                                )
                     except thread_queue.Full:
                         logger.warning(
                             f"Message queue full, dropping message from {client_id}"
                         )
                         # Reject and requeue if queue is full
-                        if channel and delivery_tag:
-                            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+                        # Check if channel is still open before nacking
+                        if channel and delivery_tag and channel.is_open:
+                            try:
+                                channel.basic_nack(
+                                    delivery_tag=delivery_tag, requeue=True
+                                )
+                            except Exception as e:
+                                logger.debug(
+                                    f"Failed to nack message (channel may be closed): {e}"
+                                )
 
                 # Consume messages (blocking call) with manual acknowledgment
                 # This will block until stop_flag is set or connection is closed
@@ -536,17 +636,48 @@ class AggregationWorker:
         Args:
             aggregated_data: Aggregated data containing diff, iteration, etc.
         """
+        # Upload aggregated diff to IPFS to avoid RabbitMQ frame size limits
+        # The aggregated diff can be very large (several MB), so we store it in IPFS
+        # and only send the CID through RabbitMQ
+        aggregated_diff_str = aggregated_data["aggregated_diff"]
+        aggregated_diff_bytes = aggregated_diff_str.encode("utf-8")
+
+        logger.info(
+            f"Uploading aggregated diff to IPFS (size: {len(aggregated_diff_bytes)} bytes) "
+            f"for iteration {aggregated_data['iteration']}"
+        )
+
+        # Upload to IPFS (synchronous wrapper for async operation)
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # No event loop in current thread, create new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        async def upload_to_ipfs():
+            async with IPFSClient() as ipfs_client:
+                cid = await ipfs_client.add_bytes(aggregated_diff_bytes, pin=True)
+                return cid
+
+        aggregated_diff_cid = loop.run_until_complete(upload_to_ipfs())
+        logger.info(
+            f"Uploaded aggregated diff to IPFS: CID={aggregated_diff_cid} "
+            f"(size: {len(aggregated_diff_bytes)} bytes)"
+        )
+
         # Create AGGREGATE task
         # Create task for blockchain worker
         # The blockchain worker will:
-        # 1. Compute hash of aggregated_diff
-        # 2. Store iteration, num_clients, client_ids in blockchain metadata
-        # 3. Register on blockchain with this metadata
+        # 1. Download aggregated_diff from IPFS using the CID
+        # 2. Compute hash of aggregated_diff
+        # 3. Store iteration, num_clients, client_ids in blockchain metadata
+        # 4. Register on blockchain with this metadata
         aggregate_task = Task(
             task_id=f"aggregate-{aggregated_data['iteration']}-{int(time.time())}",
             task_type=TaskType.BLOCKCHAIN_WRITE,  # Next step: blockchain write
             payload={
-                "aggregated_diff": aggregated_data["aggregated_diff"],
+                "aggregated_diff_cid": aggregated_diff_cid,  # IPFS CID instead of full diff
                 # These will be included in blockchain metadata by blockchain worker:
                 "iteration": aggregated_data["iteration"],
                 "num_clients": aggregated_data["num_clients"],
@@ -569,7 +700,7 @@ class AggregationWorker:
 
         logger.info(
             f"Published aggregated update for iteration {iteration_num} "
-            f"to queue '{queue_name}'"
+            f"to queue '{queue_name}' (IPFS CID: {aggregated_diff_cid})"
         )
 
     def process_client_updates(
