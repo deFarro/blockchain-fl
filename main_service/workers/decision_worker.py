@@ -17,6 +17,7 @@ from shared.models.task import (
 )
 from shared.config import settings
 from shared.logger import setup_logger
+from shared.utils.training import publish_train_task
 
 logger = setup_logger(__name__)
 
@@ -202,28 +203,11 @@ class DecisionWorker:
             iteration: Training iteration number
             weights_cid: IPFS CID of model weights (if None, clients start from scratch)
         """
-        logger.info(f"Publishing universal TRAIN task for iteration {iteration}")
-
-        # Publish a single universal task - all clients will process it
-        # Clients use their own instance_id when sending updates
-        train_task = Task(
-            task_id=f"train-iter{iteration}-{int(time.time() * 1000)}",
-            task_type=TaskType.TRAIN,
-            payload=TrainTaskPayload(
-                weights_cid=weights_cid,
-                iteration=iteration,
-            ).model_dump(),
-            metadata=TaskMetadata(source="decision_worker"),
-            model_version_id=None,
-            parent_version_id=None,
-        )
-
-        # Use fanout exchange so all clients receive the message simultaneously
-        self.publisher.publish_task(
-            task=train_task, queue_name="train_queue", use_fanout=True
-        )
-        logger.info(
-            f"Published universal TRAIN task for iteration {iteration} via fanout exchange (all clients will receive simultaneously)"
+        publish_train_task(
+            self.publisher,
+            iteration,
+            weights_cid,
+            source="decision_worker",
         )
 
     def _publish_rollback_task(

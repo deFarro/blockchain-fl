@@ -385,10 +385,12 @@ class ValidationWorker:
 
                 async def record_validation_async():
                     async with FabricClient() as blockchain_client:
+                        ipfs_cid = validation_result.get("ipfs_cid")
                         await blockchain_client.record_validation(
                             model_version_id=model_version_id,
                             accuracy=accuracy,
                             metrics=metrics,
+                            ipfs_cid=ipfs_cid,
                         )
 
                 loop.run_until_complete(record_validation_async())

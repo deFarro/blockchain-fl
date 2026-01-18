@@ -73,7 +73,7 @@ function VersionsTable({ versions, onViewDetails, isLoading = false }) {
               <td className="p-3 text-left border-b border-gray-200">{v.accuracy ? `${v.accuracy.toFixed(2)}%` : '-'}</td>
               <td className="p-3 text-left border-b border-gray-200">
                 <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${getStatusBadgeClass(v.validation_status)}`}>
-                  {v.validation_status || 'pending'}
+                  {v.validation_status || v.parent_version_id ? 'pending' : 'skipped'}
                 </span>
               </td>
               <td className="p-3 text-left border-b border-gray-200">{formatTimestamp(v.timestamp)}</td>

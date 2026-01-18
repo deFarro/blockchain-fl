@@ -1,10 +1,11 @@
 """FastAPI server for main service API."""
 
+import asyncio
 import threading
 import time
 import uvicorn
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -18,8 +19,64 @@ from main_service.workers.validation_worker import ValidationWorker
 from main_service.workers.blockchain_worker import BlockchainWorker
 from main_service.workers.storage_worker import StorageWorker
 from main_service.workers.rollback_worker import RollbackWorker
+from main_service.blockchain.fabric_client import FabricClient
 
 logger = setup_logger(__name__)
+
+
+def _get_current_iteration_from_blockchain(
+    blockchain_worker: Optional[BlockchainWorker] = None,
+) -> Optional[int]:
+    """
+    Get the current iteration from the latest model version on blockchain.
+
+    Args:
+        blockchain_worker: Optional blockchain worker instance to get latest version ID
+
+    Returns:
+        Current iteration number, or None if no versions exist
+    """
+    try:
+        # Use a new event loop for this synchronous call
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def get_iteration():
+            # Get latest version from blockchain worker if available
+            latest_version_id = None
+            if blockchain_worker:
+                latest_version_id = blockchain_worker.get_latest_model_version_id()
+
+            if not latest_version_id:
+                return None
+
+            # Query blockchain for latest version
+            async with FabricClient() as blockchain_client:
+                provenance = await blockchain_client.get_model_provenance(
+                    latest_version_id
+                )
+
+            # Extract iteration from metadata
+            metadata = provenance.get("metadata", {})
+            if isinstance(metadata, dict):
+                iteration = metadata.get("iteration")
+                if iteration is not None:
+                    return int(iteration)
+
+            # Fallback: check top-level iteration field
+            iteration = provenance.get("iteration")
+            if iteration is not None:
+                return int(iteration)
+
+            return None
+
+        iteration = loop.run_until_complete(get_iteration())
+        loop.close()
+        return iteration
+    except Exception as e:
+        logger.warning(f"Failed to get current iteration from blockchain: {str(e)}")
+        return None
+
 
 # Global worker instances (to stop them on shutdown)
 workers: Dict[str, Any] = {}
@@ -113,12 +170,57 @@ async def startup_event():
                     "Starting aggregation worker thread (will process iterations as updates arrive)"
                 )
 
-                # Track which iterations we've seen
-                current_iteration = 1
+                # Wait a bit for blockchain worker to be initialized
+                time.sleep(1)
+
+                # Get initial iteration from blockchain (will get blockchain worker dynamically)
+                current_iteration = _get_current_iteration_from_blockchain(
+                    workers.get("blockchain") if "blockchain" in workers else None
+                )
+                if current_iteration is None:
+                    current_iteration = 1  # Start from 1 if no versions exist
+                else:
+                    # Start from next iteration after the latest on blockchain
+                    current_iteration += 1
+                    logger.info(
+                        f"Starting aggregation from iteration {current_iteration} "
+                        f"(latest on blockchain: {current_iteration - 1})"
+                    )
+
                 max_iteration = 100  # Safety limit
+                sync_counter = 0  # Counter to periodically sync with blockchain
 
                 while True:
                     try:
+                        # Periodically sync with blockchain to handle rollbacks
+                        # Check every 5 iterations to avoid too frequent blockchain queries
+                        sync_counter += 1
+                        if sync_counter >= 5:
+                            sync_counter = 0
+                            # Get blockchain worker reference dynamically (in case it wasn't available at startup)
+                            blockchain_worker_ref = (
+                                workers.get("blockchain")
+                                if "blockchain" in workers
+                                else None
+                            )
+                            blockchain_iteration = (
+                                _get_current_iteration_from_blockchain(
+                                    blockchain_worker_ref
+                                )
+                            )
+                            if blockchain_iteration is not None:
+                                # If blockchain is ahead or we're way behind, sync up
+                                expected_next = blockchain_iteration + 1
+                                if current_iteration < expected_next - 5:
+                                    logger.info(
+                                        f"Syncing aggregation iteration: {current_iteration} -> {expected_next} "
+                                        f"(blockchain iteration: {blockchain_iteration})"
+                                    )
+                                    current_iteration = expected_next
+                                elif current_iteration < expected_next:
+                                    # Just slightly behind, catch up
+                                    current_iteration = expected_next
+
                         # Try to process the current iteration
                         # This will wait for enough client updates for this iteration
                         logger.debug(

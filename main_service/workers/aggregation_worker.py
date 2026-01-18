@@ -107,12 +107,10 @@ class AggregationWorker:
             update = client_updates[0]
             weight_diff_cid = update.get("weight_diff_cid")
 
-            # Create event loop for async IPFS operations if needed
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            # Create event loop for async IPFS operations
+            # Always create a new loop for worker thread operations to avoid closed loop issues
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
             if not weight_diff_cid:
                 raise ValueError(
@@ -121,11 +119,18 @@ class AggregationWorker:
                 )
 
             # Download from IPFS
-            weight_diff_str = loop.run_until_complete(
-                self._download_weight_diff_from_ipfs(weight_diff_cid)
-            )
-
-            return self._deserialize_weight_diff(weight_diff_str)
+            try:
+                weight_diff_str = loop.run_until_complete(
+                    self._download_weight_diff_from_ipfs(weight_diff_cid)
+                )
+                return self._deserialize_weight_diff(weight_diff_str)
+            finally:
+                # Clean up: close the loop we created
+                try:
+                    if not loop.is_closed():
+                        loop.close()
+                except Exception:
+                    pass
 
         # Filter excluded clients only if explicitly provided (for re-aggregation after diagnosis)
         if exclude_clients:
@@ -149,34 +154,39 @@ class AggregationWorker:
         weight_diffs = []
 
         # Create event loop for async IPFS operations
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            # No event loop in current thread, create new one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Always create a new loop for worker thread operations to avoid closed loop issues
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-        for update in client_updates:
-            weight_diff_cid = update.get("weight_diff_cid")
-            if not weight_diff_cid:
-                client_id = update.get("client_id", "unknown")
-                raise ValueError(
-                    f"Missing 'weight_diff_cid' in client update from {client_id}. "
-                    f"Only IPFS CIDs should be sent through RabbitMQ."
+        try:
+            for update in client_updates:
+                weight_diff_cid = update.get("weight_diff_cid")
+                if not weight_diff_cid:
+                    client_id = update.get("client_id", "unknown")
+                    raise ValueError(
+                        f"Missing 'weight_diff_cid' in client update from {client_id}. "
+                        f"Only IPFS CIDs should be sent through RabbitMQ."
+                    )
+
+                # Download from IPFS
+                logger.debug(f"Downloading weight diff from IPFS: CID={weight_diff_cid}")
+                weight_diff_str = loop.run_until_complete(
+                    self._download_weight_diff_from_ipfs(weight_diff_cid)
+                )
+                logger.debug(
+                    f"Downloaded weight diff from IPFS: CID={weight_diff_cid}, "
+                    f"size={len(weight_diff_str.encode('utf-8'))} bytes"
                 )
 
-            # Download from IPFS
-            logger.debug(f"Downloading weight diff from IPFS: CID={weight_diff_cid}")
-            weight_diff_str = loop.run_until_complete(
-                self._download_weight_diff_from_ipfs(weight_diff_cid)
-            )
-            logger.debug(
-                f"Downloaded weight diff from IPFS: CID={weight_diff_cid}, "
-                f"size={len(weight_diff_str.encode('utf-8'))} bytes"
-            )
-
-            weight_diff = self._deserialize_weight_diff(weight_diff_str)
-            weight_diffs.append(weight_diff)
+                weight_diff = self._deserialize_weight_diff(weight_diff_str)
+                weight_diffs.append(weight_diff)
+        finally:
+            # Clean up: close the loop we created
+            try:
+                if not loop.is_closed():
+                    loop.close()
+            except Exception:
+                pass
 
         # Get sample counts (use metrics['samples'] if available, otherwise equal weights)
         if sample_counts is None:
@@ -662,23 +672,28 @@ class AggregationWorker:
         )
 
         # Upload to IPFS (synchronous wrapper for async operation)
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            # No event loop in current thread, create new one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Always create a new loop for worker thread operations to avoid closed loop issues
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
         async def upload_to_ipfs():
             async with IPFSClient() as ipfs_client:
                 cid = await ipfs_client.add_bytes(aggregated_diff_bytes, pin=True)
                 return cid
 
-        aggregated_diff_cid = loop.run_until_complete(upload_to_ipfs())
-        logger.info(
-            f"Uploaded aggregated diff to IPFS: CID={aggregated_diff_cid} "
-            f"(size: {len(aggregated_diff_bytes)} bytes)"
-        )
+        try:
+            aggregated_diff_cid = loop.run_until_complete(upload_to_ipfs())
+            logger.info(
+                f"Uploaded aggregated diff to IPFS: CID={aggregated_diff_cid} "
+                f"(size: {len(aggregated_diff_bytes)} bytes)"
+            )
+        finally:
+            # Clean up: close the loop we created
+            try:
+                if not loop.is_closed():
+                    loop.close()
+            except Exception:
+                pass
 
         # Create AGGREGATE task
         # Create task for blockchain worker

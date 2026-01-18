@@ -63,7 +63,7 @@ func (fc *FabricClient) RegisterModelUpdate(versionID, parentVersionID, hash, di
 }
 
 // RecordValidation invokes the chaincode to record validation results
-func (fc *FabricClient) RecordValidation(versionID string, accuracy float64, metricsJSON string) (string, error) {
+func (fc *FabricClient) RecordValidation(versionID string, accuracy float64, metricsJSON string, ipfsCID string) (string, error) {
 	if !fc.initialized {
 		return "", fmt.Errorf("Fabric client not initialized")
 	}
@@ -84,6 +84,16 @@ func (fc *FabricClient) RollbackModel(fromVersionID, toVersionID, reason, trigge
 
 // GetModelProvenance queries the chaincode to get provenance information
 func (fc *FabricClient) GetModelProvenance(versionID string) ([]byte, error) {
+	if !fc.initialized {
+		return nil, fmt.Errorf("Fabric client not initialized")
+	}
+
+	// Stub implementation - would use Fabric SDK here
+	return nil, fmt.Errorf("Fabric SDK not available")
+}
+
+// GetMostRecentRollback queries the chaincode to get the most recent rollback event
+func (fc *FabricClient) GetMostRecentRollback() ([]byte, error) {
 	if !fc.initialized {
 		return nil, fmt.Errorf("Fabric client not initialized")
 	}

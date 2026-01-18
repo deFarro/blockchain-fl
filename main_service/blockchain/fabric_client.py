@@ -96,6 +96,7 @@ class FabricClient:
         model_version_id: str,
         accuracy: float,
         metrics: Dict[str, float],
+        ipfs_cid: Optional[str] = None,
     ) -> str:
         """
         Record validation results on blockchain.
@@ -104,6 +105,7 @@ class FabricClient:
             model_version_id: Model version ID
             accuracy: Validation accuracy
             metrics: Additional metrics
+            ipfs_cid: IPFS CID of encrypted diff (optional)
 
         Returns:
             Transaction ID
@@ -116,6 +118,8 @@ class FabricClient:
             "accuracy": accuracy,
             "metrics": metrics,
         }
+        if ipfs_cid:
+            payload["ipfs_cid"] = ipfs_cid
 
         try:
             response = await self.client.post("/api/v1/model/validate", json=payload)
@@ -189,6 +193,35 @@ class FabricClient:
             logger.error(f"Failed to get provenance: {str(e)}")
             raise
 
+    async def get_most_recent_rollback(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent rollback event from blockchain.
+
+        Returns:
+            Rollback event dictionary with to_version_id, reason, timestamp, etc.
+            or None if no rollback events exist
+        """
+        if not self.client:
+            raise RuntimeError("FabricClient must be used as async context manager")
+
+        try:
+            response = await self.client.get("/api/v1/model/rollback/latest")
+            response.raise_for_status()
+            result = _parse_json_response(response)
+
+            rollback_event = result.get("rollback_event")
+            if rollback_event is None:
+                # No rollback events found
+                return None
+
+            return rollback_event
+        except httpx.HTTPError as e:
+            if e.response and e.response.status_code == 404:
+                # No rollback events found
+                return None
+            logger.error(f"Failed to get most recent rollback: {str(e)}")
+            raise
+
     async def list_models(self) -> Dict[str, Any]:
         """
         List all model versions from blockchain.
@@ -204,7 +237,9 @@ class FabricClient:
             response.raise_for_status()
             result = _parse_json_response(response)
             if not isinstance(result, dict):
-                logger.warning(f"Unexpected response type from blockchain service: {type(result)}")
+                logger.warning(
+                    f"Unexpected response type from blockchain service: {type(result)}"
+                )
                 return {"versions": [], "total": 0}
             return result
         except httpx.HTTPError as e:

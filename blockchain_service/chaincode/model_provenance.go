@@ -10,6 +10,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
@@ -99,7 +100,7 @@ func (s *ModelProvenanceContract) RegisterModelUpdate(ctx contractapi.Transactio
 }
 
 // RecordValidation records validation results for a model version
-func (s *ModelProvenanceContract) RecordValidation(ctx contractapi.TransactionContextInterface, versionID string, accuracy float64, metricsJSON string) error {
+func (s *ModelProvenanceContract) RecordValidation(ctx contractapi.TransactionContextInterface, versionID string, accuracy float64, metricsJSON string, ipfsCID string) error {
 	// Get existing version
 	versionJSON, err := ctx.GetStub().GetState(versionID)
 	if err != nil {
@@ -119,6 +120,16 @@ func (s *ModelProvenanceContract) RecordValidation(ctx contractapi.TransactionCo
 	var metrics map[string]float64
 	if err := json.Unmarshal([]byte(metricsJSON), &metrics); err != nil {
 		return fmt.Errorf("failed to parse metrics: %v", err)
+	}
+
+	// Update IPFS CID if provided (store in both top-level field and metadata)
+	if ipfsCID != "" {
+		version.IPFSCID = ipfsCID
+		// Also store in metadata for easier access
+		if version.Metadata == nil {
+			version.Metadata = make(map[string]interface{})
+		}
+		version.Metadata["ipfs_cid"] = ipfsCID
 	}
 
 	// Update validation status and metrics
@@ -249,6 +260,58 @@ func (s *ModelProvenanceContract) GetValidationHistory(ctx contractapi.Transacti
 	}
 
 	return &validationRecord, nil
+}
+
+// GetMostRecentRollback retrieves the most recent rollback event
+func (s *ModelProvenanceContract) GetMostRecentRollback(ctx contractapi.TransactionContextInterface) (*RollbackEvent, error) {
+	// Query all rollback events by iterating through all keys with "rollback_" prefix
+	// In a real implementation, we'd use range queries or composite keys
+	// For now, we'll use a simple approach: iterate through all keys
+	
+	iterator, err := ctx.GetStub().GetStateByRange("", "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get state iterator: %v", err)
+	}
+	defer iterator.Close()
+
+	var mostRecentRollback *RollbackEvent
+	var mostRecentTimestamp int64 = 0
+
+	for iterator.HasNext() {
+		queryResponse, err := iterator.Next()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get next result: %v", err)
+		}
+
+		key := queryResponse.Key
+		// Check if this is a rollback event key
+		if len(key) > 9 && key[:9] == "rollback_" {
+			var rollbackEvent RollbackEvent
+			if err := json.Unmarshal(queryResponse.Value, &rollbackEvent); err != nil {
+				// Skip invalid rollback events
+				continue
+			}
+
+			// Parse timestamp
+			timestamp, err := strconv.ParseInt(rollbackEvent.Timestamp, 10, 64)
+			if err != nil {
+				// Skip if timestamp is invalid
+				continue
+			}
+
+			// Keep track of the most recent rollback
+			if mostRecentRollback == nil || timestamp > mostRecentTimestamp {
+				mostRecentRollback = &rollbackEvent
+				mostRecentTimestamp = timestamp
+			}
+		}
+	}
+
+	if mostRecentRollback == nil {
+		return nil, fmt.Errorf("no rollback events found")
+	}
+
+	return mostRecentRollback, nil
 }
 
 func main() {

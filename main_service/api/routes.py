@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from shared.logger import setup_logger
 from shared.queue.publisher import QueuePublisher
 from shared.queue.connection import QueueConnection
+from shared.utils.training import publish_train_task
 from shared.models.task import Task, TaskType, TaskMetadata, RollbackTaskPayload
 from shared.config import settings
 from shared.utils.hashing import compute_hash
@@ -188,9 +189,7 @@ async def get_model(
 
         return ModelVersionResponse(
             version_id=provenance.get("version_id", version_id),
-            parent_version_id=_normalize_parent_version_id(
-                provenance.get("parent_version_id")
-            ),
+            parent_version_id=provenance.get("parent_version_id"),
             hash=provenance.get("hash", ""),
             iteration=metadata.get("iteration") or provenance.get("iteration"),
             num_clients=metadata.get("num_clients") or provenance.get("num_clients"),
@@ -216,21 +215,6 @@ async def get_model(
             ),
             detail=f"Error getting model version: {str(e)}",
         )
-
-
-def _normalize_parent_version_id(parent_version_id: Optional[str]) -> Optional[str]:
-    """
-    Normalize parent_version_id: convert empty string to None.
-
-    Args:
-        parent_version_id: Parent version ID (may be empty string)
-
-    Returns:
-        Normalized parent version ID (None if empty string)
-    """
-    if parent_version_id == "":
-        return None
-    return parent_version_id
 
 
 def _provenance_to_model_version(
@@ -260,9 +244,7 @@ def _provenance_to_model_version(
 
     return ModelVersionResponse(
         version_id=provenance.get("version_id", version_id),
-        parent_version_id=_normalize_parent_version_id(
-            provenance.get("parent_version_id")
-        ),
+        parent_version_id=provenance.get("parent_version_id"),
         hash=provenance.get("hash", ""),
         iteration=metadata.get("iteration") or provenance.get("iteration"),
         num_clients=metadata.get("num_clients") or provenance.get("num_clients"),
@@ -365,9 +347,7 @@ async def get_provenance(
 
         return ProvenanceChainResponse(
             version_id=provenance.get("version_id", version_id),
-            parent_version_id=_normalize_parent_version_id(
-                provenance.get("parent_version_id")
-            ),
+            parent_version_id=provenance.get("parent_version_id"),
             hash=provenance.get("hash", ""),
             metadata=provenance.get("metadata", {}),
             timestamp=provenance.get("timestamp"),
@@ -421,8 +401,34 @@ async def manual_rollback(
         async with FabricClient() as blockchain_client:
             provenance = await blockchain_client.get_model_provenance(target_version_id)
 
-        ipfs_cid = provenance.get("metadata", {}).get("ipfs_cid")
+        metadata = provenance.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        ipfs_cid = (
+            metadata.get("ipfs_cid")
+            or provenance.get("ipfs_cid")
+            or provenance.get("ipfsCID")
+        )
+
         if not ipfs_cid:
+            validation_history = metadata.get("validation_history", [])
+            if isinstance(validation_history, list) and validation_history:
+                for validation_record in reversed(validation_history):
+                    if isinstance(validation_record, dict):
+                        cid = validation_record.get("ipfs_cid")
+                        if cid:
+                            ipfs_cid = cid
+                            logger.info(
+                                f"Found IPFS CID in validation_history for {target_version_id}: {cid}"
+                            )
+                            break
+
+        if not ipfs_cid:
+            logger.error(
+                f"IPFS CID not found for version {target_version_id}. "
+                f"Provenance keys: {list(provenance.keys())}, "
+                f"Metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else 'N/A'}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"IPFS CID not found for version {version_id}",
@@ -551,22 +557,11 @@ async def start_training(
 
         # Publish a single universal TRAIN task for all clients
         # All clients will process the same task and send their updates
-        train_task = Task(
-            task_id=f"api-train-{iteration}-{int(time.time())}",
-            task_type=TaskType.TRAIN,
-            payload={
-                "weights_cid": initial_weights_cid,
-                "iteration": iteration,
-            },
-            metadata=TaskMetadata(source="api_start_training"),
-            model_version_id=None,  # Will be set by decision worker
-            parent_version_id=None,  # Will be set by decision worker
-        )
-
-        # Use fanout exchange so all clients receive the message simultaneously
-        publisher.publish_task(train_task, "train_queue", use_fanout=True)
-        logger.info(
-            f"Published universal TRAIN task for iteration {iteration} via fanout exchange (all clients will receive simultaneously)"
+        publish_train_task(
+            publisher,
+            iteration,
+            initial_weights_cid,
+            source="api_start_training",
         )
 
         return StartTrainingResponse(
@@ -674,17 +669,16 @@ async def get_training_status(
 
         # Find best accuracy from validation_history or current validation_metrics
         best_accuracy = None
+        accuracy_history_list = []
         if validation_history:
-            accuracies = [
-                v.get("accuracy", 0.0)
-                for v in validation_history
-                if isinstance(v, dict) and v.get("accuracy") is not None
-            ]
-            if accuracies:
-                best_accuracy = max(accuracies)
+            accuracy_history_list = [v.get("accuracy", 0.0) for v in validation_history]
+            best_accuracy = (
+                max(accuracy_history_list) if accuracy_history_list else None
+            )
         elif validation_metrics:
             current_acc = validation_metrics.get("accuracy")
             if current_acc is not None:
+                accuracy_history_list = [current_acc]
                 best_accuracy = current_acc
 
         # Get timestamp for start_time (from first version in chain)

@@ -1,7 +1,7 @@
 """Rollback worker that handles rollback operations."""
 
 import asyncio
-from typing import Optional, cast
+from typing import Optional, cast, Dict, Any
 from shared.queue.consumer import QueueConsumer
 from shared.queue.publisher import QueuePublisher
 from shared.queue.connection import QueueConnection
@@ -14,6 +14,8 @@ from shared.models.task import (
 from main_service.blockchain.fabric_client import FabricClient
 from shared.storage.ipfs_client import IPFSClient
 from shared.logger import setup_logger
+from shared.config import settings
+from shared.utils.training import publish_train_task
 
 logger = setup_logger(__name__)
 
@@ -107,6 +109,142 @@ class RollbackWorker:
             )
             return None
 
+    async def _check_and_resume_training(
+        self, target_version_id: str, target_weights_cid: str
+    ) -> None:
+        """
+        Check if training should resume after rollback based on accuracy.
+
+        Args:
+            target_version_id: Version ID that was rolled back to
+            target_weights_cid: IPFS CID of rolled-back weights
+        """
+        try:
+            # Get accuracy of rolled-back version from blockchain
+            async with FabricClient() as blockchain_client:
+                provenance = await blockchain_client.get_model_provenance(
+                    target_version_id
+                )
+
+                # Get latest iteration from blockchain (needed to determine next iteration)
+                latest_iteration = await self._get_latest_iteration_from_blockchain(
+                    blockchain_client
+                )
+
+            # Extract accuracy from validation_metrics or metadata
+            validation_metrics = provenance.get("validation_metrics", {})
+            accuracy = None
+            if isinstance(validation_metrics, dict):
+                accuracy = validation_metrics.get("accuracy")
+
+            # Also check metadata for accuracy
+            if accuracy is None:
+                metadata = provenance.get("metadata", {})
+                if isinstance(metadata, dict):
+                    validation_history = metadata.get("validation_history", [])
+                    if isinstance(validation_history, list) and validation_history:
+                        # Get accuracy from most recent validation record
+                        for record in reversed(validation_history):
+                            if isinstance(record, dict):
+                                accuracy = record.get("accuracy")
+                                if accuracy is not None:
+                                    break
+
+            # Get iteration from metadata
+            metadata = provenance.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            rolled_back_iteration = metadata.get("iteration")
+            if rolled_back_iteration is None:
+                rolled_back_iteration = provenance.get("iteration", 1)
+
+            # Determine next iteration based on latest iteration on blockchain
+            if latest_iteration is None:
+                # No versions exist, start from iteration 1
+                next_iteration = 1
+            else:
+                # Use latest iteration + 1 as the next iteration
+                next_iteration = latest_iteration + 1
+                logger.info(
+                    f"Latest iteration on blockchain: {latest_iteration}, "
+                    f"rolled-back iteration: {rolled_back_iteration}, "
+                    f"next iteration will be: {next_iteration}"
+                )
+
+            target_accuracy = settings.target_accuracy
+
+            if accuracy is None or accuracy < target_accuracy:
+                # Accuracy is below target, resume training
+                # Use next_iteration (which accounts for existing iterations on ledger)
+                logger.info(
+                    f"Accuracy is below target ({target_accuracy:.2f}%). "
+                    f"Resuming training from iteration {next_iteration} "
+                    f"(parent will be rolled-back version {target_version_id}, iteration {rolled_back_iteration})."
+                )
+                publish_train_task(
+                    self.publisher,
+                    next_iteration,
+                    target_weights_cid,
+                    source="rollback_worker",
+                )
+            else:
+                logger.info(
+                    f"Accuracy ({accuracy:.2f}%) meets or exceeds target ({target_accuracy:.2f}%). "
+                    "Training will not resume automatically."
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error checking if training should resume after rollback: {str(e)}",
+                exc_info=True,
+            )
+            # Don't fail the rollback if this check fails
+
+    async def _get_latest_iteration_from_blockchain(
+        self, blockchain_client: FabricClient
+    ) -> Optional[int]:
+        """
+        Get the latest iteration number from blockchain by listing all models.
+
+        Args:
+            blockchain_client: FabricClient instance
+
+        Returns:
+            Latest iteration number, or None if no versions exist
+        """
+        try:
+            # List all models to find the maximum iteration
+            models_response = await blockchain_client.list_models()
+            versions = models_response.get("versions", [])
+
+            if not versions:
+                return None
+
+            max_iteration = None
+            for version in versions:
+                metadata = version.get("metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                iteration = metadata.get("iteration")
+                if iteration is None:
+                    iteration = version.get("iteration")
+
+                if iteration is not None:
+                    try:
+                        iter_num = int(iteration)
+                        if max_iteration is None or iter_num > max_iteration:
+                            max_iteration = iter_num
+                    except (ValueError, TypeError):
+                        continue
+
+            return max_iteration
+        except Exception as e:
+            logger.warning(
+                f"Failed to get latest iteration from blockchain: {str(e)}. "
+                "Will use rolled-back iteration + 1 as fallback."
+            )
+            return None
+
     async def _process_rollback(
         self,
         target_version_id: str,
@@ -153,6 +291,10 @@ class RollbackWorker:
             f"Rollback processed successfully: target_version={target_version_id}, "
             f"tx_id={transaction_id}"
         )
+
+        # After successful rollback, check if training should continue
+        await self._check_and_resume_training(target_version_id, target_weights_cid)
+
         return True
 
     def _handle_rollback_task(self, task: Task) -> bool:

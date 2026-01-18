@@ -33,24 +33,30 @@ type ValidationRecord struct {
 
 // RollbackEvent represents a rollback event
 type RollbackEvent struct {
-	TargetVersionID string `json:"target_version_id"`
-	Reason          string `json:"reason"`
-	Timestamp       string `json:"timestamp"`
+	FromVersionID string `json:"from_version_id"`
+	ToVersionID   string `json:"to_version_id"`
+	TargetVersionID string `json:"target_version_id"` // Alias for backward compatibility
+	Reason        string `json:"reason"`
+	TriggeredBy  string `json:"triggered_by"`
+	Timestamp    string `json:"timestamp"`
+	Type         string `json:"type"`
 }
 
 // BlockchainService handles blockchain operations
 type BlockchainService struct {
 	fabricClient *fabric.FabricClient
 	// In-memory storage for development mode (when Fabric is not configured)
-	records   map[string]ModelVersion
-	useFabric bool
+	records         map[string]ModelVersion
+	rollbackEvents  []RollbackEvent // Track rollback events in development mode
+	useFabric       bool
 }
 
 // NewBlockchainService creates a new blockchain service
 func NewBlockchainService() *BlockchainService {
 	service := &BlockchainService{
-		records:   make(map[string]ModelVersion),
-		useFabric: false,
+		records:        make(map[string]ModelVersion),
+		rollbackEvents: make([]RollbackEvent, 0),
+		useFabric:      false,
 	}
 
 	// Try to initialize Fabric client
@@ -86,6 +92,7 @@ type RecordValidationRequest struct {
 	ModelVersionID string             `json:"model_version_id"`
 	Accuracy       float64            `json:"accuracy"`
 	Metrics        map[string]float64 `json:"metrics"`
+	IPFSCID        string             `json:"ipfs_cid,omitempty"`
 }
 
 // RecordValidationResponse represents the response
@@ -104,6 +111,12 @@ type RollbackModelRequest struct {
 type RollbackModelResponse struct {
 	TransactionID string `json:"transaction_id"`
 	Status        string `json:"status"`
+}
+
+// GetMostRecentRollbackResponse represents the response for getting most recent rollback
+type GetMostRecentRollbackResponse struct {
+	RollbackEvent *RollbackEvent `json:"rollback_event,omitempty"`
+	Status        string          `json:"status"`
 }
 
 // GetProvenanceResponse represents provenance information
@@ -228,6 +241,7 @@ func (bs *BlockchainService) recordValidation(w http.ResponseWriter, r *http.Req
 			req.ModelVersionID,
 			req.Accuracy,
 			string(metricsJSON),
+			req.IPFSCID,
 		)
 		if err != nil {
 			log.Printf("Fabric transaction failed: %v, falling back to in-memory storage", err)
@@ -244,6 +258,13 @@ func (bs *BlockchainService) recordValidation(w http.ResponseWriter, r *http.Req
 				version.ValidationStatus = "failed"
 			}
 			version.ValidationMetrics = req.Metrics
+			// Update IPFS CID in metadata if provided
+			if req.IPFSCID != "" {
+				if version.Metadata == nil {
+					version.Metadata = make(map[string]interface{})
+				}
+				version.Metadata["ipfs_cid"] = req.IPFSCID
+			}
 			bs.records[req.ModelVersionID] = version
 		}
 		log.Printf("Validation recorded: version=%s, accuracy=%.4f", req.ModelVersionID, req.Accuracy)
@@ -291,11 +312,70 @@ func (bs *BlockchainService) rollbackModel(w http.ResponseWriter, r *http.Reques
 		// Fallback to in-memory storage
 		log.Printf("Rollback requested: target_version=%s, reason=%s", req.TargetVersionID, req.Reason)
 		txID = fmt.Sprintf("tx_rollback_%s", req.TargetVersionID)
+		
+		// Store rollback event in memory for development mode
+		rollbackEvent := RollbackEvent{
+			FromVersionID:   "",
+			ToVersionID:     req.TargetVersionID,
+			TargetVersionID: req.TargetVersionID,
+			Reason:          req.Reason,
+			TriggeredBy:     "manual",
+			Timestamp:       fmt.Sprintf("%d", time.Now().Unix()),
+			Type:            "manual",
+		}
+		bs.rollbackEvents = append(bs.rollbackEvents, rollbackEvent)
 	}
 
 	response := RollbackModelResponse{
 		TransactionID: txID,
 		Status:        "success",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (bs *BlockchainService) getMostRecentRollback(w http.ResponseWriter, r *http.Request) {
+	var rollbackEvent *RollbackEvent
+
+	if bs.useFabric && bs.fabricClient != nil {
+		// Use Fabric SDK
+		rollbackJSON, err := bs.fabricClient.GetMostRecentRollback()
+		if err != nil {
+			log.Printf("Fabric query failed: %v, falling back to in-memory storage", err)
+			bs.useFabric = false
+		} else {
+			// Parse rollback event
+			var event RollbackEvent
+			if err := json.Unmarshal(rollbackJSON, &event); err == nil {
+				// Set TargetVersionID for backward compatibility
+				if event.TargetVersionID == "" && event.ToVersionID != "" {
+					event.TargetVersionID = event.ToVersionID
+				}
+				rollbackEvent = &event
+			}
+		}
+	}
+
+	if !bs.useFabric {
+		// Fallback to in-memory storage
+		// Return the most recent rollback event from memory
+		if len(bs.rollbackEvents) > 0 {
+			// Get the most recent rollback event (last one in the slice)
+			mostRecent := bs.rollbackEvents[len(bs.rollbackEvents)-1]
+			rollbackEvent = &mostRecent
+		} else {
+			rollbackEvent = nil
+		}
+	}
+
+	response := GetMostRecentRollbackResponse{
+		RollbackEvent: rollbackEvent,
+		Status:        "success",
+	}
+
+	if rollbackEvent == nil {
+		response.Status = "not_found"
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -402,6 +482,7 @@ func main() {
 	r.HandleFunc("/api/v1/model/register", service.registerModelUpdate).Methods("POST")
 	r.HandleFunc("/api/v1/model/validate", service.recordValidation).Methods("POST")
 	r.HandleFunc("/api/v1/model/rollback", service.rollbackModel).Methods("POST")
+	r.HandleFunc("/api/v1/model/rollback/latest", service.getMostRecentRollback).Methods("GET")
 	r.HandleFunc("/api/v1/model/provenance/{version_id}", service.getProvenance).Methods("GET")
 	r.HandleFunc("/api/v1/model/list", service.listModels).Methods("GET")
 
