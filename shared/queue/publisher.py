@@ -168,7 +168,10 @@ class QueuePublisher:
             )
             logger.debug(f"Published message to queue {queue_name}")
         except Exception as e:
-            logger.error(f"Failed to publish message to queue {queue_name}: {str(e)}", exc_info=True)
+            logger.error(
+                f"Failed to publish message to queue {queue_name}: {str(e)}",
+                exc_info=True,
+            )
             raise
 
     def close(self):
@@ -184,4 +187,3 @@ class QueuePublisher:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.close()
-

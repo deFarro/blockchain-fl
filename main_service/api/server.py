@@ -128,7 +128,7 @@ async def startup_event():
                             queue_name="client_updates",
                             iteration=current_iteration,
                             timeout=settings.aggregation_timeout,
-                            min_clients=2,  # Require at least 2 clients
+                            min_clients=settings.min_clients_for_aggregation,
                         )
 
                         if success:

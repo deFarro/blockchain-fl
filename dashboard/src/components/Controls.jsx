@@ -16,7 +16,7 @@ function Controls({
             id="start-training-btn"
             onClick={onStartTraining}
             disabled={isTraining}
-            className="bg-indigo-500 text-white border-none py-3 px-6 rounded-md cursor-pointer text-base mr-2.5 mb-2.5 transition-colors hover:bg-indigo-600 disabled:bg-gray-300 disabled:cursor-not-allowed block"
+            className="bg-indigo-500 text-white border-none py-3 px-6 rounded-md cursor-pointer text-base transition-colors hover:bg-indigo-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
           >
             ▶ Start Training
           </button>
@@ -24,19 +24,19 @@ function Controls({
             id="stop-training-btn"
             onClick={onStopTraining}
             disabled={!isTraining}
-            className="bg-indigo-500 text-white border-none py-3 px-6 rounded-md cursor-pointer text-base mr-2.5 mb-2.5 transition-colors hover:bg-indigo-600 disabled:bg-gray-300 disabled:cursor-not-allowed block"
+            className="bg-indigo-500 text-white border-none py-3 px-6 rounded-md cursor-pointer text-base transition-colors hover:bg-indigo-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
           >
             ⏹ Stop Training
           </button>
           <button
             onClick={onRefresh}
-            className="bg-indigo-500 text-white border-none py-3 px-6 rounded-md cursor-pointer text-base mr-2.5 mb-2.5 transition-colors hover:bg-indigo-600 block"
+            className="bg-indigo-500 text-white border-none py-3 px-6 rounded-md cursor-pointer text-base transition-colors hover:bg-indigo-600"
           >
             🔄 Refresh Status
           </button>
           <button
             onClick={() => window.open('/docs', '_blank')}
-            className="bg-indigo-500 text-white border-none py-3 px-6 rounded-md cursor-pointer text-base mr-2.5 mb-2.5 transition-colors hover:bg-indigo-600 block"
+            className="bg-indigo-500 text-white border-none py-3 px-6 rounded-md cursor-pointer text-base transition-colors hover:bg-indigo-600"
           >
             📚 API Docs
           </button>

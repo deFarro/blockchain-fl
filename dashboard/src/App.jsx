@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react'
 import Header from './components/Header'
 import Controls from './components/Controls'
 import StatusCard from './components/StatusCard'
-import AccuracyChart from './components/AccuracyChart'
 import VersionsTable from './components/VersionsTable'
 import Rollback from './components/RollbackModal'
 import ModelDetails from './components/ModelDetailsModal'
@@ -142,10 +141,7 @@ function App() {
       />
 
       {activeTab === 'dashboard' && (
-        <>
-          <StatusCard status={status} isLoading={isLoadingStatus} />
-          <AccuracyChart accuracyHistory={status?.accuracy_history} />
-        </>
+        <StatusCard status={status} isLoading={isLoadingStatus} />
       )}
 
       {activeTab === 'models' && (

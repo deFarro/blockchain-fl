@@ -1,5 +1,31 @@
 import React, { useState, useEffect } from 'react'
 import { apiCall } from '../utils/api'
+import { formatTimestamp } from '../utils/format'
+
+// Helper function to infer parent version ID from version ID pattern
+function inferParentVersionId(versionId, parentVersionId, iteration) {
+  // If parent_version_id exists and is not empty, use it
+  if (parentVersionId && parentVersionId.trim() !== '') {
+    return parentVersionId
+  }
+  
+  // If iteration is provided and > 0, parent should exist
+  if (iteration !== null && iteration !== undefined && iteration > 0) {
+    return `Missing (should be model_v${iteration - 1}_...)`
+  }
+  
+  // Try to infer from version ID pattern: model_v{iteration}_{timestamp}_{unique_id}
+  const match = versionId.match(/^model_v(\d+)_/)
+  if (match) {
+    const iter = parseInt(match[1], 10)
+    if (iter > 0) {
+      // For iteration > 0, parent should be iteration - 1
+      return `Missing (should be model_v${iter - 1}_...)`
+    }
+  }
+  
+  return null
+}
 
 function ModelDetails({ apiKey, apiBase, initialVersionId }) {
   const [versionId, setVersionId] = useState('')
@@ -71,7 +97,7 @@ function ModelDetails({ apiKey, apiBase, initialVersionId }) {
         <div className="mt-5 bg-gray-50 p-4 rounded-md font-mono text-xs">
           <strong>Version ID:</strong> {model.version_id}
           <br />
-          <strong>Parent Version:</strong> {model.parent_version_id || 'None (initial)'}
+          <strong>Parent Version:</strong> {inferParentVersionId(model.version_id, model.parent_version_id, model.iteration) || 'None (initial)'}
           <br />
           <strong>Iteration:</strong> {model.iteration || '-'}
           <br />
@@ -81,7 +107,7 @@ function ModelDetails({ apiKey, apiBase, initialVersionId }) {
           <br />
           <strong>Hash:</strong> {model.hash ? `${model.hash.substring(0, 16)}...` : '-'}
           <br />
-          <strong>Timestamp:</strong> {model.timestamp ? new Date(model.timestamp).toLocaleString() : '-'}
+          <strong>Timestamp:</strong> {formatTimestamp(model.timestamp)}
           <br />
           <strong>Num Clients:</strong> {model.num_clients || '-'}
           <br />

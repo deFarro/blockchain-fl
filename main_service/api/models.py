@@ -110,9 +110,6 @@ class TrainingStatusResponse(BaseModel):
     best_checkpoint_cid: Optional[str] = Field(
         None, description="IPFS CID of best checkpoint"
     )
-    accuracy_history: Optional[List[float]] = Field(
-        None, description="History of accuracy values per iteration"
-    )
 
 
 class ErrorResponse(BaseModel):

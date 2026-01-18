@@ -1,5 +1,31 @@
 import React, { useState } from 'react'
 import { apiCall } from '../utils/api'
+import { formatTimestamp } from '../utils/format'
+
+// Helper function to infer parent version ID from version ID pattern
+function inferParentVersionId(versionId, parentVersionId, iteration) {
+  // If parent_version_id exists and is not empty, use it
+  if (parentVersionId && parentVersionId.trim() !== '') {
+    return parentVersionId
+  }
+  
+  // If iteration is provided and > 0, parent should exist
+  if (iteration !== null && iteration !== undefined && iteration > 0) {
+    return `Missing (should be model_v${iteration - 1}_...)`
+  }
+  
+  // Try to infer from version ID pattern: model_v{iteration}_{timestamp}_{unique_id}
+  const match = versionId.match(/^model_v(\d+)_/)
+  if (match) {
+    const iter = parseInt(match[1], 10)
+    if (iter > 0) {
+      // For iteration > 0, parent should be iteration - 1
+      return `Missing (should be model_v${iter - 1}_...)`
+    }
+  }
+  
+  return null
+}
 
 function Provenance({ apiKey, apiBase }) {
   const [versionId, setVersionId] = useState('')
@@ -60,10 +86,20 @@ function Provenance({ apiKey, apiBase }) {
         <div className="mt-5 bg-gray-50 p-4 rounded-md">
           <strong>Version ID:</strong> {provenance.version_id}
           <br />
-          <strong>Parent Version:</strong> {provenance.parent_version_id || 'None (initial)'}
+          <strong>Parent Version:</strong> {inferParentVersionId(
+            provenance.version_id, 
+            provenance.parent_version_id,
+            provenance.metadata?.iteration
+          ) || 'None (initial)'}
           <br />
           <strong>Hash:</strong> {provenance.hash ? `${provenance.hash.substring(0, 16)}...` : '-'}
           <br />
+          {provenance.timestamp && (
+            <>
+              <strong>Timestamp:</strong> {formatTimestamp(provenance.timestamp)}
+              <br />
+            </>
+          )}
           {provenance.chain && provenance.chain.length > 0 ? (
             <>
               <h4 className="mt-3 mb-2 font-semibold">Provenance Chain:</h4>

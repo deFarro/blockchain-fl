@@ -114,20 +114,51 @@ class QueueConsumer:
             # Call user callback
             callback(task)
 
-            # Acknowledge message
-            channel.basic_ack(delivery_tag=method.delivery_tag)
-
-            logger.debug(f"Acknowledged task {task.task_id}")
+            # Acknowledge message (only if channel is still open)
+            if channel.is_open:
+                try:
+                    channel.basic_ack(delivery_tag=method.delivery_tag)
+                    logger.debug(f"Acknowledged task {task.task_id}")
+                except pika.exceptions.ChannelClosedByBroker as e:
+                    logger.warning(
+                        f"Channel closed by broker while acknowledging task {task.task_id}: {str(e)}"
+                    )
+                except pika.exceptions.ChannelWrongStateError as e:
+                    logger.warning(
+                        f"Channel in wrong state while acknowledging task {task.task_id}: {str(e)}"
+                    )
+            else:
+                logger.warning(
+                    f"Channel closed, cannot acknowledge task {task.task_id} (delivery_tag: {method.delivery_tag})"
+                )
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse message: {str(e)}")
             # Reject message and don't requeue (malformed message)
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            if channel.is_open:
+                try:
+                    channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                except (
+                    pika.exceptions.ChannelClosedByBroker,
+                    pika.exceptions.ChannelWrongStateError,
+                ) as nack_error:
+                    logger.debug(
+                        f"Channel closed/wrong state while nacking malformed message: {nack_error}"
+                    )
 
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
             # Reject message and requeue (temporary error)
-            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            if channel.is_open:
+                try:
+                    channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                except (
+                    pika.exceptions.ChannelClosedByBroker,
+                    pika.exceptions.ChannelWrongStateError,
+                ) as nack_error:
+                    logger.debug(
+                        f"Channel closed/wrong state while nacking failed message: {nack_error}"
+                    )
 
     @handle_connection_error
     def consume_tasks(

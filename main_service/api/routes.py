@@ -188,7 +188,9 @@ async def get_model(
 
         return ModelVersionResponse(
             version_id=provenance.get("version_id", version_id),
-            parent_version_id=provenance.get("parent_version_id"),
+            parent_version_id=_normalize_parent_version_id(
+                provenance.get("parent_version_id")
+            ),
             hash=provenance.get("hash", ""),
             iteration=metadata.get("iteration") or provenance.get("iteration"),
             num_clients=metadata.get("num_clients") or provenance.get("num_clients"),
@@ -216,6 +218,122 @@ async def get_model(
         )
 
 
+def _normalize_parent_version_id(parent_version_id: Optional[str]) -> Optional[str]:
+    """
+    Normalize parent_version_id: convert empty string to None.
+
+    Args:
+        parent_version_id: Parent version ID (may be empty string)
+
+    Returns:
+        Normalized parent version ID (None if empty string)
+    """
+    if parent_version_id == "":
+        return None
+    return parent_version_id
+
+
+def _provenance_to_model_version(
+    provenance: dict, version_id: str
+) -> ModelVersionResponse:
+    """
+    Convert provenance data to ModelVersionResponse.
+
+    Args:
+        provenance: Provenance data from blockchain
+        version_id: Version ID (fallback if not in provenance)
+
+    Returns:
+        ModelVersionResponse object
+    """
+    metadata = provenance.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    # Extract accuracy from validation_metrics
+    validation_metrics = provenance.get("validation_metrics") or metadata.get(
+        "validation_metrics"
+    )
+    accuracy = None
+    if isinstance(validation_metrics, dict):
+        accuracy = validation_metrics.get("accuracy")
+
+    return ModelVersionResponse(
+        version_id=provenance.get("version_id", version_id),
+        parent_version_id=_normalize_parent_version_id(
+            provenance.get("parent_version_id")
+        ),
+        hash=provenance.get("hash", ""),
+        iteration=metadata.get("iteration") or provenance.get("iteration"),
+        num_clients=metadata.get("num_clients") or provenance.get("num_clients"),
+        client_ids=metadata.get("client_ids") or provenance.get("client_ids"),
+        ipfs_cid=metadata.get("ipfs_cid")
+        or provenance.get("ipfs_cid")
+        or provenance.get("ipfsCID"),
+        timestamp=provenance.get("timestamp"),
+        validation_status=provenance.get("validation_status")
+        or metadata.get("validation_status"),
+        accuracy=accuracy,
+        metadata=metadata,
+    )
+
+
+async def _build_provenance_chain(
+    blockchain_client: FabricClient,
+    version_id: str,
+    visited: Optional[set] = None,
+) -> List[ModelVersionResponse]:
+    """
+    Build provenance chain by recursively following parent_version_id links.
+
+    Args:
+        blockchain_client: Fabric client instance
+        version_id: Starting version ID
+        visited: Set of visited version IDs to prevent cycles
+
+    Returns:
+        List of ModelVersionResponse objects ordered from oldest to newest
+    """
+    if visited is None:
+        visited = set()
+
+    # Prevent infinite loops
+    if version_id in visited:
+        logger.warning(f"Cycle detected in provenance chain at {version_id}")
+        return []
+
+    visited.add(version_id)
+
+    try:
+        provenance = await blockchain_client.get_model_provenance(version_id)
+        version = _provenance_to_model_version(provenance, version_id)
+
+        parent_version_id = provenance.get("parent_version_id")
+        if parent_version_id:
+            try:
+                # Recursively get parent chain
+                parent_chain = await _build_provenance_chain(
+                    blockchain_client, parent_version_id, visited
+                )
+                # Return chain with oldest first (parent chain + current version)
+                return parent_chain + [version]
+            except Exception as e:
+                logger.warning(
+                    f"Could not fetch parent chain for {version_id}, parent: {parent_version_id}: {str(e)}"
+                )
+                # Return at least the current version if we can't get parents
+                return [version]
+        else:
+            # This is the initial version
+            return [version]
+    except Exception as e:
+        logger.error(
+            f"Error building provenance chain for {version_id}: {str(e)}", exc_info=True
+        )
+        # Return empty chain if we can't even get the current version
+        return []
+
+
 @router.get("/models/{version_id}/provenance", response_model=ProvenanceChainResponse)
 async def get_provenance(
     version_id: str,
@@ -240,14 +358,16 @@ async def get_provenance(
         async with FabricClient() as blockchain_client:
             provenance = await blockchain_client.get_model_provenance(version_id)
 
-        chain: Optional[List[ModelVersionResponse]] = None
-        if include_chain:
-            # TODO: Build full provenance chain by following parent_version_id
-            chain = []
+            chain: Optional[List[ModelVersionResponse]] = None
+            if include_chain:
+                # Build full provenance chain by following parent_version_id
+                chain = await _build_provenance_chain(blockchain_client, version_id)
 
         return ProvenanceChainResponse(
             version_id=provenance.get("version_id", version_id),
-            parent_version_id=provenance.get("parent_version_id"),
+            parent_version_id=_normalize_parent_version_id(
+                provenance.get("parent_version_id")
+            ),
             hash=provenance.get("hash", ""),
             metadata=provenance.get("metadata", {}),
             timestamp=provenance.get("timestamp"),
@@ -538,7 +658,6 @@ async def get_training_status(
                 start_time=None,
                 best_checkpoint_version=None,
                 best_checkpoint_cid=None,
-                accuracy_history=None,
             )
 
         # Query blockchain for latest version
@@ -555,16 +674,17 @@ async def get_training_status(
 
         # Find best accuracy from validation_history or current validation_metrics
         best_accuracy = None
-        accuracy_history_list = []
         if validation_history:
-            accuracy_history_list = [v.get("accuracy", 0.0) for v in validation_history]
-            best_accuracy = (
-                max(accuracy_history_list) if accuracy_history_list else None
-            )
+            accuracies = [
+                v.get("accuracy", 0.0)
+                for v in validation_history
+                if isinstance(v, dict) and v.get("accuracy") is not None
+            ]
+            if accuracies:
+                best_accuracy = max(accuracies)
         elif validation_metrics:
             current_acc = validation_metrics.get("accuracy")
             if current_acc is not None:
-                accuracy_history_list = [current_acc]
                 best_accuracy = current_acc
 
         # Get timestamp for start_time (from first version in chain)
@@ -603,7 +723,6 @@ async def get_training_status(
             start_time=start_time,
             best_checkpoint_version=best_checkpoint_version,
             best_checkpoint_cid=best_checkpoint_cid,
-            accuracy_history=accuracy_history_list if accuracy_history_list else None,
         )
     except Exception as e:
         logger.error(f"Error getting training status: {str(e)}", exc_info=True)

@@ -1,4 +1,5 @@
 import React from 'react'
+import { formatTimestamp } from '../utils/format'
 
 function VersionsTable({ versions, onViewDetails, isLoading = false }) {
   const getStatusBadgeClass = (status) => {
@@ -75,7 +76,7 @@ function VersionsTable({ versions, onViewDetails, isLoading = false }) {
                   {v.validation_status || 'pending'}
                 </span>
               </td>
-              <td className="p-3 text-left border-b border-gray-200">{v.timestamp ? new Date(v.timestamp).toLocaleString() : '-'}</td>
+              <td className="p-3 text-left border-b border-gray-200">{formatTimestamp(v.timestamp)}</td>
               <td className="p-3 text-left border-b border-gray-200">
                 <button
                   onClick={() => onViewDetails(v.version_id)}

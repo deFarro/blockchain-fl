@@ -48,11 +48,8 @@ class ValidationWorker:
         self.test_loader: Optional[DataLoader] = None
         self.running = False
 
-        # Prefetch test dataset on startup
-        logger.info("Prefetching test dataset on startup...")
         try:
             self._load_test_dataset()
-            logger.info("Test dataset prefetched successfully")
         except Exception as e:
             logger.warning(
                 f"Failed to prefetch test dataset: {e}. "

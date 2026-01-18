@@ -23,7 +23,14 @@ build:
 	docker-compose build
 
 up:
-	docker-compose up -d
+	@if [ -f .env ]; then \
+		set -a; \
+		. .env; \
+		set +a; \
+	fi; \
+	NUM_CLIENTS=$${NUM_CLIENTS:-2}; \
+	echo "Starting services with $$NUM_CLIENTS client(s)..."; \
+	docker-compose up --scale client-service=$$NUM_CLIENTS
 
 down:
 	docker-compose down
