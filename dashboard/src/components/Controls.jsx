@@ -11,7 +11,7 @@ function Controls({
 }) {
   return (
     <div className="bg-white rounded-lg my-5 shadow-md">
-      <div className="mb-5 flex gap-2">
+      <div className="mb-5 px-4 flex gap-2">
           <button
             id="start-training-btn"
             onClick={onStartTraining}

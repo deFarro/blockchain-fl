@@ -486,7 +486,6 @@ dashboard/
 ├── package.json        # Dependencies (includes Tailwind CSS)
 ├── vite.config.js      # Vite configuration
 ├── tailwind.config.js  # Tailwind CSS configuration
-├── postcss.config.js   # PostCSS configuration (for Tailwind)
 └── dist/               # Production build (generated)
 ```
 
