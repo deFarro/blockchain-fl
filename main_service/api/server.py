@@ -70,7 +70,7 @@ def _get_current_iteration_from_blockchain(
 
             return None
 
-        iteration = loop.run_until_complete(get_iteration())
+        iteration: Optional[int] = loop.run_until_complete(get_iteration())
         loop.close()
         return iteration
     except Exception as e:
@@ -279,6 +279,16 @@ async def startup_event():
         workers["blockchain"] = blockchain_worker
         worker_threads["blockchain"] = start_worker_in_thread(
             "blockchain", blockchain_worker, "blockchain_write"
+        )
+
+        # Start separate blockchain worker instance for TRAINING_COMPLETE tasks
+        # (needs separate connection to avoid RabbitMQ connection conflicts)
+        blockchain_completion_worker = BlockchainWorker()
+        workers["blockchain_completion"] = blockchain_completion_worker
+        worker_threads["blockchain_completion"] = start_worker_in_thread(
+            "blockchain_completion",
+            blockchain_completion_worker,
+            "training_complete_queue",
         )
 
         # Start rollback worker (handles rollback tasks)

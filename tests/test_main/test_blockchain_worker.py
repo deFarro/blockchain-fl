@@ -160,9 +160,40 @@ async def test_process_blockchain_write():
     # Mock FabricClient
     mock_transaction_id = "tx_test_12345"
 
+    async def mock_list_models():
+        """Return versions for normal flow."""
+        return {
+            "versions": [
+                {
+                    "version_id": worker.current_model_version_id or "model_v1_test_abc",
+                    "timestamp": "1000",
+                    "metadata": {"iteration": 1},
+                    "parent_version_id": None,
+                },
+            ]
+        }
+
+    async def mock_get_provenance(version_id: str):
+        """Return provenance for a version."""
+        if version_id == worker.current_model_version_id:
+            return {
+                "version_id": version_id,
+                "timestamp": "1000",
+                "metadata": {"iteration": 1},
+                "parent_version_id": None,
+            }
+        return {}
+
+    async def mock_get_most_recent_rollback():
+        """No rollback."""
+        return None
+
     with patch("main_service.workers.blockchain_worker.FabricClient") as mock_fabric_class:
         mock_client = AsyncMock()
         mock_client.register_model_update = AsyncMock(return_value=mock_transaction_id)
+        mock_client.list_models = AsyncMock(side_effect=mock_list_models)
+        mock_client.get_model_provenance = AsyncMock(side_effect=mock_get_provenance)
+        mock_client.get_most_recent_rollback = AsyncMock(side_effect=mock_get_most_recent_rollback)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_fabric_class.return_value = mock_client
@@ -192,6 +223,34 @@ async def test_process_blockchain_write():
         print(f"✓ Parent version ID: {result['parent_version_id']}")
         print(f"✓ Blockchain hash: {result['blockchain_hash'][:16]}...")
         print(f"✓ Transaction ID: {result['transaction_id']}")
+
+        # Update mock to include the first version for the second iteration
+        async def mock_list_models_2():
+            """Return versions including first iteration."""
+            return {
+                "versions": [
+                    {
+                        "version_id": result["model_version_id"],
+                        "timestamp": "1000",
+                        "metadata": {"iteration": 1},
+                        "parent_version_id": None,
+                    },
+                ]
+            }
+
+        async def mock_get_provenance_2(version_id: str):
+            """Return provenance for a version."""
+            if version_id == result["model_version_id"]:
+                return {
+                    "version_id": version_id,
+                    "timestamp": "1000",
+                    "metadata": {"iteration": 1},
+                    "parent_version_id": None,
+                }
+            return {}
+
+        mock_client.list_models = AsyncMock(side_effect=mock_list_models_2)
+        mock_client.get_model_provenance = AsyncMock(side_effect=mock_get_provenance_2)
 
         # Test second iteration (should have parent)
         result_2 = await worker._process_blockchain_write(
@@ -318,6 +377,16 @@ def test_handle_blockchain_write_task():
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_ipfs_class.return_value = mock_client
+
+        # Ensure we have a clean event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
         # Use the handler directly
         success = worker._handle_blockchain_write_task(task)

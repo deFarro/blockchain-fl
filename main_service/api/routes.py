@@ -691,17 +691,76 @@ async def get_training_status(
             except (ValueError, TypeError):
                 pass
 
-        # Determine status based on validation_status
+        # Check if training has completed by looking for completion_reason in metadata
+        # or by checking blockchain worker's completion tracker
+        completion_reason = None
+        completion_info = None
+
+        # First check metadata
+        if isinstance(metadata, dict):
+            completion_reason = metadata.get("completion_reason")
+
+        # Also check blockchain worker's completion tracker
+        # Check both blockchain worker instances (main and completion)
+        # Check if training has completed for any version (not just the latest)
+        try:
+            from main_service.api.server import workers
+
+            # Check main blockchain worker - first check if any completion exists
+            if "blockchain" in workers:
+                blockchain_worker = workers["blockchain"]
+                if blockchain_worker.has_any_completion():
+                    # Get latest completion info (most recent)
+                    completion_info = blockchain_worker.get_latest_completion_info()
+                    if completion_info:
+                        completion_reason = completion_info.get("completion_reason")
+                else:
+                    # Fallback: check specific version
+                    completion_info = blockchain_worker.get_completion_info(
+                        latest_version_id
+                    )
+                    if completion_info:
+                        completion_reason = completion_info.get("completion_reason")
+
+            # Also check blockchain_completion worker
+            if not completion_reason and "blockchain_completion" in workers:
+                blockchain_completion_worker = workers["blockchain_completion"]
+                if blockchain_completion_worker.has_any_completion():
+                    # Get latest completion info (most recent)
+                    completion_info = (
+                        blockchain_completion_worker.get_latest_completion_info()
+                    )
+                    if completion_info:
+                        completion_reason = completion_info.get("completion_reason")
+                else:
+                    # Fallback: check specific version
+                    completion_info = blockchain_completion_worker.get_completion_info(
+                        latest_version_id
+                    )
+                    if completion_info:
+                        completion_reason = completion_info.get("completion_reason")
+        except Exception as e:
+            logger.debug(f"Could not check completion tracker: {str(e)}")
+            pass  # Ignore errors accessing blockchain worker
+
+        # Determine status based on validation_status and completion
         validation_status = provenance.get("validation_status", "pending")
-        if validation_status == "pending":
+
+        if completion_reason:
+            # Training has completed
+            training_status = "completed"
+            is_training = False
+        elif validation_status == "pending":
             training_status = "running"
+            is_training = True
         elif validation_status == "passed":
-            training_status = "running"  # Still training
+            # Check if this might be the final version (no new versions created recently)
+            # For now, assume still training if validation passed
+            training_status = "running"
+            is_training = True
         else:
             training_status = "stopped"
-
-        # is_training: assume True if we have a version with pending/passed validation
-        is_training = validation_status in ["pending", "passed"]
+            is_training = False
 
         # Get best checkpoint info from metadata
         best_checkpoint_version = metadata.get("best_checkpoint_version")

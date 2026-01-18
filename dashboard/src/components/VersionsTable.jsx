@@ -66,14 +66,16 @@ function VersionsTable({ versions, onViewDetails, isLoading = false }) {
           </tr>
         </thead>
         <tbody>
-          {versions.map((v) => (
+          {versions.map((v) => {
+            const displayStatus = v.validation_status || (v.parent_version_id ? 'pending' : 'skipped')
+            return (
             <tr key={v.version_id} className="hover:bg-gray-50">
               <td className="p-3 text-left border-b border-gray-200">{v.version_id}</td>
               <td className="p-3 text-left border-b border-gray-200">{v.iteration || '-'}</td>
               <td className="p-3 text-left border-b border-gray-200">{v.accuracy ? `${v.accuracy.toFixed(2)}%` : '-'}</td>
               <td className="p-3 text-left border-b border-gray-200">
-                <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${getStatusBadgeClass(v.validation_status)}`}>
-                  {v.validation_status || v.parent_version_id ? 'pending' : 'skipped'}
+                <span className={`inline-block px-2 py-1 rounded text-xs font-semibold ${getStatusBadgeClass(displayStatus)}`}>
+                  {displayStatus}
                 </span>
               </td>
               <td className="p-3 text-left border-b border-gray-200">{formatTimestamp(v.timestamp)}</td>
@@ -86,7 +88,8 @@ function VersionsTable({ versions, onViewDetails, isLoading = false }) {
                 </button>
               </td>
             </tr>
-          ))}
+            )
+          })}
         </tbody>
       </table>
     </div>

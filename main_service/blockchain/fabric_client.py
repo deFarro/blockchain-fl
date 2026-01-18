@@ -209,14 +209,14 @@ class FabricClient:
             response.raise_for_status()
             result = _parse_json_response(response)
 
-            rollback_event = result.get("rollback_event")
+            rollback_event: Optional[Dict[str, Any]] = result.get("rollback_event")
             if rollback_event is None:
                 # No rollback events found
                 return None
 
             return rollback_event
         except httpx.HTTPError as e:
-            if e.response and e.response.status_code == 404:
+            if hasattr(e, "response") and e.response and e.response.status_code == 404:
                 # No rollback events found
                 return None
             logger.error(f"Failed to get most recent rollback: {str(e)}")

@@ -14,6 +14,7 @@ from shared.models.task import (
     TaskMetadata,
     BlockchainWriteTaskPayload,
     StorageWriteTaskPayload,
+    TrainingCompleteTaskPayload,
 )
 from main_service.blockchain.fabric_client import FabricClient
 from shared.utils.hashing import compute_hash
@@ -42,6 +43,7 @@ class BlockchainWorker:
         self.current_model_version_id: Optional[str] = None
         # Track latest model version ID (alias for current_model_version_id)
         self.latest_model_version_id: Optional[str] = None
+        self.completion_tracker: Dict[str, Dict[str, Any]] = {}
 
         logger.info("Blockchain worker initialized")
 
@@ -62,7 +64,9 @@ class BlockchainWorker:
             or None if no rollback detected
         """
         try:
-            rollback_event = await blockchain_client.get_most_recent_rollback()
+            rollback_event: Optional[Dict[str, Any]] = (
+                await blockchain_client.get_most_recent_rollback()
+            )
 
             if rollback_event is None:
                 # No rollback events found
@@ -192,6 +196,8 @@ class BlockchainWorker:
                     blockchain_client
                 )
 
+                rollback_target_has_post_rollback_children = False
+
                 if rollback_info:
                     rollback_target, rollback_timestamp = rollback_info
                     # Check if this is the first iteration after rollback
@@ -283,7 +289,6 @@ class BlockchainWorker:
                             )
                     except Exception as e:
                         # If we can't check, be safe and use rollback target
-                        # (better to use rollback target than wrong parent)
                         logger.warning(
                             f"Failed to check if rollback target has children: {str(e)}. "
                             f"Using rollback target {rollback_target} as parent."
@@ -355,6 +360,8 @@ class BlockchainWorker:
                 parent_candidates = [
                     v for v in candidates if v["iteration"] == parent_iteration
                 ]
+                parent_version_id: Optional[str] = None
+                is_skipping_candidate = False
 
                 if parent_candidates:
                     parent_candidates.sort(key=lambda v: v["timestamp"], reverse=True)
@@ -485,7 +492,7 @@ class BlockchainWorker:
                                 )
                                 is_skipping_candidate = False
 
-                    if not is_skipping_candidate:
+                    if not is_skipping_candidate and parent_version_id is None:
                         # Normal case: use iteration N-1 as parent
                         try:
                             candidate_provenance = (
@@ -875,6 +882,48 @@ class BlockchainWorker:
             f"to queue '{queue_name}'"
         )
 
+    def _handle_training_complete_task(self, task: Task) -> bool:
+        """
+        Handle a TRAINING_COMPLETE task.
+
+        Args:
+            task: TRAINING_COMPLETE task to process
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Processing TRAINING_COMPLETE task: {task.task_id}")
+
+            # Parse payload
+            payload = TrainingCompleteTaskPayload(**task.payload)
+
+            # Store completion info in tracker
+            completion_info = {
+                "completion_reason": payload.metadata.get(
+                    "completion_reason", "Training completed"
+                ),
+                "final_accuracy": payload.final_accuracy,
+                "final_metrics": payload.final_metrics,
+                "training_summary": payload.training_summary,
+                "final_model_version_id": payload.final_model_version_id,
+            }
+
+            self.completion_tracker[payload.final_model_version_id] = completion_info
+
+            logger.info(
+                f"Training completion recorded for version {payload.final_model_version_id}: "
+                f"{completion_info['completion_reason']}"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(
+                f"Error processing TRAINING_COMPLETE task {task.task_id}: {str(e)}",
+                exc_info=True,
+            )
+            return False
+
     def _handle_blockchain_write_task(self, task: Task) -> bool:
         """
         Handle a BLOCKCHAIN_WRITE task.
@@ -895,6 +944,10 @@ class BlockchainWorker:
             # Create event loop once for all async operations
             try:
                 loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    # Event loop is closed, create a new one
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
             except RuntimeError:
                 # No event loop in current thread, create new one
                 loop = asyncio.new_event_loop()
@@ -984,10 +1037,16 @@ class BlockchainWorker:
                     logger.error(
                         f"Failed to process BLOCKCHAIN_WRITE task {task.task_id}"
                     )
+            elif task.task_type == TaskType.TRAINING_COMPLETE:
+                success = self._handle_training_complete_task(task)
+                if not success:
+                    logger.error(
+                        f"Failed to process TRAINING_COMPLETE task {task.task_id}"
+                    )
             else:
                 logger.warning(
                     f"Received unexpected task type: {task.task_type} "
-                    f"(expected BLOCKCHAIN_WRITE)"
+                    f"(expected BLOCKCHAIN_WRITE or TRAINING_COMPLETE)"
                 )
 
         self.consumer.consume_tasks(queue_name, task_handler)
@@ -1000,6 +1059,41 @@ class BlockchainWorker:
             Latest model version ID, or None if no versions exist
         """
         return self.latest_model_version_id
+
+    def get_completion_info(self, model_version_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get completion information for a model version.
+
+        Args:
+            model_version_id: Model version ID to check
+
+        Returns:
+            Completion info dictionary or None if not completed
+        """
+        return self.completion_tracker.get(model_version_id)
+
+    def has_any_completion(self) -> bool:
+        """
+        Check if training has completed for any version.
+
+        Returns:
+            True if any version has completion info, False otherwise
+        """
+        return len(self.completion_tracker) > 0
+
+    def get_latest_completion_info(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent completion information.
+
+        Returns:
+            Most recent completion info dictionary or None if no completions
+        """
+        if not self.completion_tracker:
+            return None
+
+        # Return the most recent completion (last one added)
+        # Since dicts maintain insertion order in Python 3.7+, we can get the last item
+        return list(self.completion_tracker.values())[-1]
 
     def stop(self) -> None:
         """Stop blockchain worker."""
