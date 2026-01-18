@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     api_port: int = 8000  # API server port
 
     # Aggregation Configuration (for main service)
-    min_clients_for_aggregation: int = 2
-    aggregation_timeout: int = 300  # seconds to wait for client updates
+    min_clients_for_aggregation: int = 1
+    aggregation_timeout: int = 60  # seconds to wait for client updates
 
     # Client Exclusion Configuration (for regression diagnosis)
     enable_client_exclusion: bool = (

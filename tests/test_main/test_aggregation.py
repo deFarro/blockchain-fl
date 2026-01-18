@@ -16,10 +16,15 @@ if "RABBITMQ_HOST" not in os.environ:
 
 import torch
 import pytest
+import time
+import threading
+import queue as thread_queue
+from unittest.mock import Mock, MagicMock
 from shared.queue.publisher import QueuePublisher
 from main_service.workers.aggregation_worker import AggregationWorker
 from main_service.workers.regression_diagnosis import RegressionDiagnosis
 from client_service.training.model import SimpleCNN
+from shared.config import settings
 
 
 def serialize_diff(diff):
@@ -413,6 +418,370 @@ def test_regression_diagnosis_basic():
     print("=" * 60)
 
 
+def test_collect_client_updates_timeout_behavior():
+    """Test that collection waits for timeout unless all clients respond."""
+    print("\n" + "=" * 60)
+    print("Testing Collection Timeout Behavior")
+    print("=" * 60)
+    print()
+
+    # Save original num_clients setting
+    original_num_clients = settings.num_clients
+
+    try:
+        # Set up test scenario: 4 total clients, min 2 required
+        settings.num_clients = 4
+        min_clients = 2
+        timeout = 1.5  # Short timeout for testing
+
+        worker = AggregationWorker()
+
+        # Create mock messages that will arrive at different times
+        messages_to_send = [
+            {"client_id": "client_0", "iteration": 1, "weight_diff_cid": "cid0"},
+            {"client_id": "client_1", "iteration": 1, "weight_diff_cid": "cid1"},
+            {"client_id": "client_2", "iteration": 1, "weight_diff_cid": "cid2"},
+        ]
+
+        # Use a thread-safe queue to simulate message arrival
+        message_queue = thread_queue.Queue()
+        stop_consuming = threading.Event()
+        messages_sent = []
+
+        def simulate_message_arrival():
+            """Simulate messages arriving at different times."""
+            # Send 2 messages immediately (min_clients)
+            message_queue.put(messages_to_send[0])
+            messages_sent.append(0)
+            time.sleep(0.1)
+            message_queue.put(messages_to_send[1])
+            messages_sent.append(1)
+            time.sleep(0.1)
+            # Send 3rd message after a delay (but before timeout)
+            time.sleep(0.3)
+            message_queue.put(messages_to_send[2])
+            messages_sent.append(2)
+            # Don't send 4th message - should wait for timeout
+
+        # Mock QueueConnection and QueueConsumer
+        mock_connection = Mock()
+        mock_consumer = Mock()
+
+        def mock_consume_dict(queue_name, handler, auto_ack=False):
+            """Mock consume_dict that simulates message consumption."""
+            # Start thread to simulate message arrival
+            arrival_thread = threading.Thread(
+                target=simulate_message_arrival, daemon=True
+            )
+            arrival_thread.start()
+
+            # Process messages from queue
+            start_time = time.time()
+            while not stop_consuming.is_set():
+                try:
+                    if stop_consuming.is_set():
+                        break
+
+                    try:
+                        message = message_queue.get(timeout=0.05)
+                        # Call handler with message
+                        handler(message, channel=None, delivery_tag=None)
+                    except thread_queue.Empty:
+                        # Check if timeout exceeded
+                        if time.time() - start_time > timeout + 0.5:
+                            break
+                        continue
+                except Exception:
+                    break
+
+        mock_consumer.consume_dict = mock_consume_dict
+        mock_consumer.stop = Mock()
+        mock_connection.close = Mock()
+
+        # Patch QueueConnection to return our mock
+        with patch(
+            "main_service.workers.aggregation_worker.QueueConnection",
+            return_value=mock_connection,
+        ):
+            with patch(
+                "main_service.workers.aggregation_worker.QueueConsumer",
+                return_value=mock_consumer,
+            ):
+                start_time = time.time()
+                updates = worker._collect_client_updates(
+                    queue_name="test_queue",
+                    iteration=1,
+                    timeout=timeout,
+                    min_clients=min_clients,
+                )
+                elapsed_time = time.time() - start_time
+
+                # Signal stop
+                stop_consuming.set()
+                time.sleep(0.1)  # Give threads time to finish
+
+        # Should have collected 3 updates (2 immediately + 1 delayed)
+        # Should have waited close to timeout since not all clients responded
+        assert len(updates) == 3, f"Expected 3 updates, got {len(updates)}"
+        assert (
+            elapsed_time >= timeout * 0.7
+        ), f"Should wait close to timeout ({timeout}s), but elapsed {elapsed_time:.2f}s"
+        print(f"✓ Collected {len(updates)} updates (expected 3)")
+        print(f"✓ Waited {elapsed_time:.2f}s (timeout: {timeout}s)")
+        print(f"✓ Correctly waited for timeout when not all clients responded")
+
+    finally:
+        # Restore original setting
+        settings.num_clients = original_num_clients
+
+    print("=" * 60)
+    print("✓ Test PASSED")
+    print("=" * 60)
+
+
+def test_collect_client_updates_early_completion():
+    """Test that collection stops early when all clients respond."""
+    print("\n" + "=" * 60)
+    print("Testing Collection Early Completion")
+    print("=" * 60)
+    print()
+
+    # Save original num_clients setting
+    original_num_clients = settings.num_clients
+
+    try:
+        # Set up test scenario: 3 total clients, min 2 required
+        settings.num_clients = 3
+        min_clients = 2
+        timeout = 3  # Longer timeout
+
+        worker = AggregationWorker()
+
+        # Create mock messages
+        messages_to_send = [
+            {"client_id": "client_0", "iteration": 1, "weight_diff_cid": "cid0"},
+            {"client_id": "client_1", "iteration": 1, "weight_diff_cid": "cid1"},
+            {"client_id": "client_2", "iteration": 1, "weight_diff_cid": "cid2"},
+        ]
+
+        # Use a thread-safe queue to simulate message arrival
+        message_queue = thread_queue.Queue()
+        stop_consuming = threading.Event()
+        all_messages_sent_event = threading.Event()
+
+        def simulate_message_arrival():
+            """Simulate all messages arriving quickly."""
+            # Send all messages quickly (within 0.2 seconds)
+            for msg in messages_to_send:
+                message_queue.put(msg)
+                time.sleep(0.05)  # Short delay between messages
+            # Signal that all messages have been sent
+            all_messages_sent_event.set()
+
+        # Mock QueueConnection and QueueConsumer
+        mock_connection = Mock()
+        mock_consumer = Mock()
+
+        def mock_consume_dict(queue_name, handler, auto_ack=False):
+            """Mock consume_dict that simulates message consumption."""
+            # Start thread to simulate message arrival
+            arrival_thread = threading.Thread(
+                target=simulate_message_arrival, daemon=True
+            )
+            arrival_thread.start()
+
+            # Process messages from queue - keep processing until all are sent and processed
+            processed_count = 0
+            start_time = time.time()
+            # Keep processing until we've handled all messages or stop is signaled
+            while not stop_consuming.is_set():
+                try:
+                    try:
+                        message = message_queue.get(timeout=0.15)
+                        handler(message, channel=None, delivery_tag=None)
+                        processed_count += 1
+                    except thread_queue.Empty:
+                        # If all messages have been sent AND processed by handler, wait longer
+                        # to ensure main thread has time to process them from internal queue
+                        if all_messages_sent_event.is_set() and processed_count >= len(
+                            messages_to_send
+                        ):
+                            # Wait longer for main thread to process messages from internal queue
+                            # The handler puts messages in an internal queue that the main thread reads from
+                            time.sleep(0.8)
+                            # Check one more time for any late messages
+                            try:
+                                message = message_queue.get(timeout=0.1)
+                                handler(message, channel=None, delivery_tag=None)
+                                processed_count += 1
+                            except thread_queue.Empty:
+                                pass
+                            # Exit after giving main thread sufficient time to process
+                            break
+                        # If timeout exceeded, exit
+                        elapsed = time.time() - start_time
+                        if elapsed > timeout + 2:
+                            break
+                        continue
+                except Exception:
+                    break
+            # Wait for arrival thread to finish
+            arrival_thread.join(timeout=1.0)
+
+        mock_consumer.consume_dict = mock_consume_dict
+        mock_consumer.stop = Mock()
+        mock_connection.close = Mock()
+
+        # Patch QueueConnection to return our mock
+        with patch(
+            "main_service.workers.aggregation_worker.QueueConnection",
+            return_value=mock_connection,
+        ):
+            with patch(
+                "main_service.workers.aggregation_worker.QueueConsumer",
+                return_value=mock_consumer,
+            ):
+                start_time = time.time()
+                updates = worker._collect_client_updates(
+                    queue_name="test_queue",
+                    iteration=1,
+                    timeout=timeout,
+                    min_clients=min_clients,
+                )
+                elapsed_time = time.time() - start_time
+
+                # Signal stop and wait for threads to finish
+                stop_consuming.set()
+                time.sleep(0.3)  # Give threads time to finish processing
+
+        # Should have collected all 3 updates
+        # Should complete early (much faster than timeout) since all clients responded
+        assert (
+            len(updates) == 3
+        ), f"Expected 3 updates (all clients), got {len(updates)}"
+        assert (
+            elapsed_time < timeout * 0.4
+        ), f"Should complete early (< {timeout * 0.4}s), but took {elapsed_time:.2f}s"
+        print(f"✓ Collected all {len(updates)} updates (all clients responded)")
+        print(f"✓ Completed early in {elapsed_time:.2f}s (timeout: {timeout}s)")
+        print(f"✓ Correctly stopped early when all clients responded")
+
+    finally:
+        # Restore original setting
+        settings.num_clients = original_num_clients
+
+    print("=" * 60)
+    print("✓ Test PASSED")
+    print("=" * 60)
+
+
+def test_collect_client_updates_minimum_clients():
+    """Test that minimum client requirement is still respected."""
+    print("\n" + "=" * 60)
+    print("Testing Collection Minimum Clients Requirement")
+    print("=" * 60)
+    print()
+
+    # Save original num_clients setting
+    original_num_clients = settings.num_clients
+
+    try:
+        # Set up test scenario: 5 total clients, min 2 required
+        settings.num_clients = 5
+        min_clients = 2
+        timeout = 1.5  # Short timeout
+
+        worker = AggregationWorker()
+
+        # Create mock messages - only send 1 (below minimum)
+        messages_to_send = [
+            {"client_id": "client_0", "iteration": 1, "weight_diff_cid": "cid0"},
+        ]
+
+        # Use a thread-safe queue to simulate message arrival
+        message_queue = thread_queue.Queue()
+        stop_consuming = threading.Event()
+
+        def simulate_message_arrival():
+            """Simulate only 1 message arriving."""
+            message_queue.put(messages_to_send[0])
+            # Don't send more - should wait for timeout
+
+        # Mock QueueConnection and QueueConsumer
+        mock_connection = Mock()
+        mock_consumer = Mock()
+
+        def mock_consume_dict(queue_name, handler, auto_ack=False):
+            """Mock consume_dict that simulates message consumption."""
+            # Start thread to simulate message arrival
+            arrival_thread = threading.Thread(
+                target=simulate_message_arrival, daemon=True
+            )
+            arrival_thread.start()
+
+            # Process messages from queue
+            start_time = time.time()
+            while not stop_consuming.is_set():
+                try:
+                    if stop_consuming.is_set():
+                        break
+
+                    try:
+                        message = message_queue.get(timeout=0.05)
+                        handler(message, channel=None, delivery_tag=None)
+                    except thread_queue.Empty:
+                        # Check if timeout exceeded
+                        if time.time() - start_time > timeout + 0.5:
+                            break
+                        continue
+                except Exception:
+                    break
+
+        mock_consumer.consume_dict = mock_consume_dict
+        mock_consumer.stop = Mock()
+        mock_connection.close = Mock()
+
+        # Patch QueueConnection to return our mock
+        with patch(
+            "main_service.workers.aggregation_worker.QueueConnection",
+            return_value=mock_connection,
+        ):
+            with patch(
+                "main_service.workers.aggregation_worker.QueueConsumer",
+                return_value=mock_consumer,
+            ):
+                start_time = time.time()
+                updates = worker._collect_client_updates(
+                    queue_name="test_queue",
+                    iteration=1,
+                    timeout=timeout,
+                    min_clients=min_clients,
+                )
+                elapsed_time = time.time() - start_time
+
+                # Signal stop
+                stop_consuming.set()
+                time.sleep(0.1)  # Give threads time to finish
+
+        # Should have collected only 1 update (below minimum)
+        # Should have waited for timeout since we didn't reach minimum
+        assert len(updates) == 1, f"Expected 1 update, got {len(updates)}"
+        assert (
+            elapsed_time >= timeout * 0.7
+        ), f"Should wait for timeout ({timeout}s), but elapsed {elapsed_time:.2f}s"
+        print(f"✓ Collected {len(updates)} update (below minimum of {min_clients})")
+        print(f"✓ Waited {elapsed_time:.2f}s (timeout: {timeout}s)")
+        print(f"✓ Correctly waited for timeout when minimum not reached")
+
+    finally:
+        # Restore original setting
+        settings.num_clients = original_num_clients
+
+    print("=" * 60)
+    print("✓ Test PASSED")
+    print("=" * 60)
+
+
 def test_regression_diagnosis_identify_problematic():
     """Test regression diagnosis identifying problematic clients."""
     print("\n" + "=" * 60)
@@ -488,6 +857,9 @@ def run_all_tests():
         test_fedavg_single_client,
         test_fedavg_empty_updates,
         test_fedavg_client_exclusion,
+        test_collect_client_updates_timeout_behavior,
+        test_collect_client_updates_early_completion,
+        test_collect_client_updates_minimum_clients,
         test_regression_diagnosis_basic,
         test_regression_diagnosis_identify_problematic,
     ]

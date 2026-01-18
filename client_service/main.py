@@ -2,6 +2,8 @@
 
 import sys
 import signal
+from http.client import RemoteDisconnected
+from urllib.error import URLError
 from client_service.config import config
 from client_service.worker import ClientWorker
 from shared.logger import setup_logger
@@ -24,6 +26,7 @@ def main():
     worker = ClientWorker()
 
     # Prefetch training dataset on startup using the worker's instance_id
+    # This is optional - if it fails, the dataset will be loaded when training starts
     logger.info("Prefetching training dataset on startup...")
     try:
         train_loader, train_dataset = worker.trainer.load_dataset(
@@ -33,7 +36,15 @@ def main():
             f"Training dataset prefetched successfully: "
             f"{len(train_dataset)} samples (instance_id={worker.instance_id})"
         )
+    except (ConnectionError, OSError, RemoteDisconnected, URLError) as e:
+        # Network/download errors - common and expected, don't log full traceback
+        logger.warning(
+            f"Failed to prefetch training dataset (network error): {e}. "
+            "It will be loaded when training starts. "
+            "This is normal if the dataset needs to be downloaded or network is temporarily unavailable."
+        )
     except Exception as e:
+        # Other errors - log with traceback for debugging
         logger.warning(
             f"Failed to prefetch training dataset: {e}. "
             "It will be loaded when training starts.",

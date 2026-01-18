@@ -171,7 +171,7 @@ class QueueConsumer:
             # Create unique queue for this consumer
             consumer_queue = f"{queue_name}_{consumer_id}"
             self.declare_queue(
-                consumer_queue, durable=durable, exclusive=False, auto_delete=False
+                consumer_queue, durable=durable, exclusive=False, auto_delete=True
             )
 
             # Bind queue to fanout exchange

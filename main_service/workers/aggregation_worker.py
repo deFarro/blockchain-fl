@@ -249,9 +249,11 @@ class AggregationWorker:
         # Set current iteration being processed
         self.current_iteration = iteration
 
+        num_clients = settings.num_clients  # Total number of registered clients
         logger.info(
             f"Collecting client updates for iteration {iteration} "
-            f"(min_clients={min_clients}, timeout={timeout}s)"
+            f"(min_clients={min_clients}, total_clients={num_clients}, timeout={timeout}s). "
+            f"Will wait for timeout unless all {num_clients} clients respond."
         )
 
         def message_handler(message: Dict[str, Any]):
@@ -280,7 +282,7 @@ class AggregationWorker:
                 updates.append(message)
                 logger.info(
                     f"Received update from {client_id} "
-                    f"for iteration {iteration} ({len(updates)}/{min_clients})"
+                    f"for iteration {iteration} ({len(updates)}/{num_clients} clients, min: {min_clients})"
                 )
             elif msg_iteration is not None and msg_iteration < iteration:
                 # Late update for a past iteration - reject it
@@ -477,8 +479,9 @@ class AggregationWorker:
         deadline = start_time + timeout
 
         try:
-            # Collect messages until we have enough or timeout
+            # Collect messages until we have all clients or timeout
             deadline_passed = False
+
             while not stop_flag.is_set():
                 current_time = time.time()
 
@@ -486,19 +489,32 @@ class AggregationWorker:
                 if current_time >= deadline and not deadline_passed:
                     elapsed = current_time - start_time
                     deadline_passed = True
+                    queued_count = message_queue.qsize()
                     logger.warning(
                         f"Timeout reached ({timeout}s, elapsed: {elapsed:.2f}s) "
                         f"while collecting updates. "
-                        f"Got {len(updates)} updates (required: {min_clients}). "
+                        f"Got {len(updates)} updates processed (required: {min_clients}, total clients: {num_clients}), "
+                        f"{queued_count} messages queued. "
                         f"Will continue processing queued messages..."
                     )
                     # Don't break immediately - allow processing of messages already in queue
 
-                if len(updates) >= min_clients:
+                # Only break early if we have updates from ALL registered clients
+                # Otherwise, wait for the full timeout to collect as many as possible
+                if len(updates) >= num_clients:
                     elapsed = current_time - start_time
                     logger.info(
-                        f"Collected {len(updates)} updates (required: {min_clients}) "
-                        f"in {elapsed:.2f}s"
+                        f"Collected updates from all {len(updates)} registered clients "
+                        f"in {elapsed:.2f}s (early completion)"
+                    )
+                    break
+
+                # If we have minimum clients but not all clients, and deadline has passed, break
+                if deadline_passed and len(updates) >= min_clients:
+                    elapsed = current_time - start_time
+                    logger.info(
+                        f"Collected {len(updates)} updates (required: {min_clients}, total clients: {num_clients}) "
+                        f"after timeout in {elapsed:.2f}s"
                     )
                     break
 
@@ -530,9 +546,11 @@ class AggregationWorker:
                     if deadline_passed:
                         # Deadline passed and no more messages in queue - we're done
                         elapsed = time.time() - start_time
+                        queued_count = message_queue.qsize()
                         logger.warning(
                             f"No more messages in queue after timeout. "
-                            f"Got {len(updates)} updates (required: {min_clients}) "
+                            f"Got {len(updates)} updates processed (required: {min_clients}, total clients: {num_clients}), "
+                            f"{queued_count} messages still queued "
                             f"after {elapsed:.2f}s"
                         )
                         break
@@ -573,7 +591,7 @@ class AggregationWorker:
             elapsed_total = time.time() - start_time
             logger.info(
                 f"Collection completed: {len(updates)} updates collected in {elapsed_total:.2f}s "
-                f"(timeout: {timeout}s, required: {min_clients})"
+                f"(timeout: {timeout}s, required: {min_clients}, total clients: {num_clients})"
             )
 
         return updates
