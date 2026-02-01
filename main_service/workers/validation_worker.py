@@ -387,6 +387,8 @@ class ValidationWorker:
                             "model_validation"
                         ][-1]
                         last_metadata["iteration"] = iteration
+                    metrics_collector.set_pending_iteration(iteration)
+                    metrics_collector.collect_system_sample()
             except Exception as e:
                 logger.warning(
                     f"Failed to get iteration for model version {model_version_id}: {e}. "

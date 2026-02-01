@@ -26,6 +26,8 @@ class MetricsCollector:
         self.iteration_system_samples: Dict[int, List[int]] = {}
         # Track which sample index corresponds to which iteration
         self.sample_to_iteration: Dict[int, int] = {}
+        # Pending iteration for the next collect_system_sample() (set by record_timing or set_pending_iteration)
+        self._pending_iteration: Optional[int] = None
 
     def record_timing(
         self, operation: str, duration: float, metadata: Optional[Dict[str, Any]] = None
@@ -68,10 +70,6 @@ class MetricsCollector:
             if isinstance(iteration, (int, float)):
                 iteration = int(iteration)
                 # Store the iteration so the next collect_system_sample() call can associate with it
-                # We'll use a simple approach: track the last iteration seen
-                # When collect_system_sample() is called, it will check for pending iteration
-                if not hasattr(self, "_pending_iteration"):
-                    self._pending_iteration = None
                 self._pending_iteration = iteration
                 # Also track which timing sample index this is for each operation
                 timing_idx = len(self.operation_timings[operation]) - 1
@@ -136,10 +134,7 @@ class MetricsCollector:
             logger.warning(f"Failed to collect system metrics: {sample.get('error')}")
         else:
             # Associate this sample with the pending iteration if available
-            if (
-                hasattr(self, "_pending_iteration")
-                and self._pending_iteration is not None
-            ):
+            if self._pending_iteration is not None:
                 iteration = self._pending_iteration
                 sample_idx = self.system_metrics.sample_count - 1
                 if iteration not in self.iteration_system_samples:
@@ -149,6 +144,19 @@ class MetricsCollector:
                 # Clear pending iteration after associating
                 self._pending_iteration = None
         return sample
+
+    def set_pending_iteration(self, iteration: int) -> None:
+        """
+        Set the iteration for the next collect_system_sample() call.
+
+        Use this when you know the iteration after an operation has run (e.g. after
+        fetching it from blockchain) so the next system sample is associated with
+        that iteration for per-iteration metrics.
+
+        Args:
+            iteration: Iteration number to associate with the next sample
+        """
+        self._pending_iteration = iteration
 
     def get_metrics(self) -> Dict[str, Any]:
         """
@@ -179,15 +187,19 @@ class MetricsCollector:
         """
         Get metrics in a format suitable for CSV export.
 
+        Used when doing a full export (e.g. at training end via POST /metrics/save).
+        Builds iteration_system_metrics by iterating over all iterations that have
+        system samples, in order. sorted_iterations ensures we process iteration 1,
+        then 2, ... so prev_iteration_end_idx is correct for single-sample iterations.
+
         Returns:
             Dictionary with flattened metrics ready for CSV export
         """
         metrics = self.get_metrics()
 
         # Calculate per-iteration system metrics summaries
-        # For each iteration, calculate summary from samples collected during that iteration
         iteration_system_metrics = {}
-        # Sort iterations to process them in order
+        # Process iterations in order (1, 2, ...) so prev_iteration_end_idx is correct
         sorted_iterations = sorted(self.iteration_system_samples.keys())
         prev_iteration_end_idx = 0
 
@@ -246,8 +258,7 @@ class MetricsCollector:
         self.scenario_info.clear()
         self.iteration_system_samples.clear()
         self.sample_to_iteration.clear()
-        if hasattr(self, "_pending_iteration"):
-            self._pending_iteration = None
+        self._pending_iteration = None
         if hasattr(self, "_timing_to_iteration"):
             self._timing_to_iteration.clear()
         self.system_metrics.reset()

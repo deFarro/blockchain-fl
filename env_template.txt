@@ -56,11 +56,3 @@ NUM_CLIENTS=2                 # Number of client instances
 EPOCHS=10                     # Epochs per training iteration
 SPLIT_TYPE=iid                # Dataset split type (iid or non_iid)
 DATASET_SEED=42               # Seed for dataset splitting
-
-# Client Configuration
-CLIENT_ID=client_0
-CLIENT_DATASET_PATH=data/mnist/train/client_0.pt
-
-# Main Service Configuration
-TEST_DATASET_PATH=data/mnist/test/test.pt
-

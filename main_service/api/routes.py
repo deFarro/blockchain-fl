@@ -573,7 +573,9 @@ async def start_training(
 
             metrics_collector = get_metrics_collector()
             metrics_collector.set_scenario_info(scenario_info)
-            metrics_collector.system_metrics.reset()  # Reset system metrics at start
+            # Full reset so iteration_system_samples and timings don't mix with previous runs
+            metrics_collector.reset()
+            metrics_collector.set_scenario_info(scenario_info)  # re-apply scenario after reset
 
             # Initialize CSV file for incremental metrics export
             try:

@@ -450,7 +450,6 @@ class MetricsExporter:
                                 break
 
                 # Add system metrics for this iteration (or global if no iteration found)
-                # Use per-iteration system metrics when available (key lookup by int)
                 iteration_system_metrics = metrics_data.get(
                     "iteration_system_metrics", {}
                 )
@@ -458,10 +457,15 @@ class MetricsExporter:
                     "iteration_system_samples", {}
                 )
                 iteration_key = int(iteration) if iteration is not None else None
-                per_iter_summary = (
-                    iteration_system_metrics.get(iteration_key)
-                    if iteration_key is not None
-                    else None
+                per_iter_summary = None
+                if iteration_key is not None:
+                    per_iter_summary = iteration_system_metrics.get(
+                        iteration_key
+                    ) or iteration_system_metrics.get(str(iteration_key))
+
+                has_samples_for_iteration = iteration_key is not None and (
+                    iteration_key in iteration_system_samples
+                    or str(iteration_key) in iteration_system_samples
                 )
 
                 if per_iter_summary is not None and isinstance(per_iter_summary, dict):
@@ -470,10 +474,7 @@ class MetricsExporter:
                     logger.debug(
                         f"Using per-iteration system metrics for iteration {iteration}"
                     )
-                elif (
-                    iteration_key is not None
-                    and iteration_key in iteration_system_samples
-                ):
+                elif has_samples_for_iteration:
                     # Iteration has samples but no precomputed summary: use global so we show real values
                     logger.debug(
                         f"Per-iteration summary missing for iteration {iteration}, "
