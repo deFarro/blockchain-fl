@@ -93,7 +93,8 @@ class StorageWorker:
             cid = await ipfs_client.add_bytes(encrypted_diff, pin=True)
             upload_duration = time.time() - upload_start
 
-            get_metrics_collector().record_timing(
+            metrics_collector = get_metrics_collector()
+            metrics_collector.record_timing(
                 "ipfs_upload",
                 upload_duration,
                 metadata={
@@ -102,6 +103,8 @@ class StorageWorker:
                     "cid": str(cid),
                 },
             )
+            # Collect system metrics sample during IPFS operation
+            metrics_collector.collect_system_sample()
 
             logger.info(
                 f"Uploaded to IPFS: CID={cid} (duration: {upload_duration:.3f}s, "

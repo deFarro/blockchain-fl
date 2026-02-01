@@ -253,7 +253,11 @@ class ValidationWorker:
         metrics = self._evaluate_model(test_loader)
         eval_duration = time.time() - eval_start
 
-        get_metrics_collector().record_timing(
+        metrics_collector = get_metrics_collector()
+
+        # Get iteration from model version (will be set later in _handle_validation_task)
+        # For now, we'll set it in the task handler after we get it from blockchain
+        metrics_collector.record_timing(
             "model_validation",
             eval_duration,
             metadata={
@@ -262,6 +266,8 @@ class ValidationWorker:
                 "loss": metrics.get("loss", 0.0),
             },
         )
+        # Collect system metrics sample during validation
+        metrics_collector.collect_system_sample()
 
         validation_result = {
             "model_version_id": model_version_id,
@@ -370,11 +376,57 @@ class ValidationWorker:
                     logger.debug(
                         f"Found iteration {iteration} for model version {model_version_id}"
                     )
+                    # Update the validation timing metadata with iteration
+                    metrics_collector = get_metrics_collector()
+                    # Find the last model_validation timing and update its metadata
+                    if (
+                        "model_validation" in metrics_collector.operation_metadata
+                        and metrics_collector.operation_metadata["model_validation"]
+                    ):
+                        last_metadata = metrics_collector.operation_metadata[
+                            "model_validation"
+                        ][-1]
+                        last_metadata["iteration"] = iteration
             except Exception as e:
                 logger.warning(
                     f"Failed to get iteration for model version {model_version_id}: {e}. "
                     "Decision worker will use current_iteration state."
                 )
+
+            # Export metrics for this iteration incrementally
+            if iteration is not None:
+                try:
+                    from shared.monitoring.metrics_exporter import MetricsExporter
+                    from shared.monitoring.metrics import get_metrics_collector
+
+                    metrics_collector = get_metrics_collector()
+                    exporter = MetricsExporter()
+                    # Initialize CSV file if not already done (idempotent)
+                    if MetricsExporter.get_active_csv_path() is None:
+                        scenario_info = metrics_collector.scenario_info
+                        if not scenario_info:
+                            # Try to infer from settings
+                            from shared.config import settings
+
+                            scenario_info = {
+                                "blockchain_enabled": bool(
+                                    settings.blockchain_service_url
+                                ),
+                                "ipfs_enabled": bool(settings.ipfs_host),
+                                "num_clients": settings.num_clients,
+                                "target_accuracy": settings.target_accuracy,
+                                "max_iterations": settings.max_iterations,
+                                "max_rollbacks": settings.max_rollbacks,
+                            }
+                        exporter.initialize_csv_file(scenario_info)
+
+                    # Append metrics for this iteration
+                    exporter.append_iteration_metrics(iteration, metrics_collector)
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to export incremental metrics for iteration {iteration}: {e}",
+                        exc_info=True,
+                    )
 
             # Record validation on blockchain (async)
             metrics = validation_result.get("metrics", {})

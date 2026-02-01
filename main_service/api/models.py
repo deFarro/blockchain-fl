@@ -80,6 +80,9 @@ class StartTrainingRequest(BaseModel):
     num_iterations: Optional[int] = Field(
         None, description="Maximum number of iterations (None for unlimited)"
     )
+    dataset_name: Optional[str] = Field(
+        None, description="Dataset name for benchmarking (e.g., 'mnist', 'cifar10')"
+    )
 
 
 class StartTrainingResponse(BaseModel):
@@ -117,3 +120,21 @@ class ErrorResponse(BaseModel):
 
     error: str = Field(..., description="Error message")
     detail: Optional[str] = Field(None, description="Detailed error information")
+
+
+class SaveMetricsRequest(BaseModel):
+    """Request model for saving metrics."""
+
+    metrics: Dict[str, Any] = Field(..., description="Metrics data to save")
+    filename: Optional[str] = Field(None, description="Optional filename for CSV file")
+    output_dir: Optional[str] = Field(
+        None, description="Optional output directory (defaults to ./metrics_output)"
+    )
+
+
+class SaveMetricsResponse(BaseModel):
+    """Response model for saving metrics."""
+
+    success: bool = Field(..., description="Whether metrics were saved successfully")
+    message: str = Field(..., description="Response message")
+    csv_path: Optional[str] = Field(None, description="Path to saved CSV file")

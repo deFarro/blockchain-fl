@@ -24,4 +24,4 @@ cryptography==43.0.0
 # Utilities
 pyyaml==6.0.2
 python-json-logger==3.2.0
-
+psutil==7.2.1

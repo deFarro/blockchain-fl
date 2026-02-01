@@ -347,6 +347,299 @@ EPOCHS=10                     # Epochs per training iteration
 NUM_CLIENTS=2                 # Number of client instances
 ```
 
+## Benchmarking and Metrics Collection
+
+The system includes comprehensive benchmarking and metrics collection designed for research purposes. Metrics are automatically collected during training runs and exported to CSV files for analysis.
+
+### Overview
+
+The metrics collection system tracks performance across multiple dimensions:
+
+#### **Performance Metrics**
+- **Latency**: Operation-level timing for all critical operations
+  - Blockchain writes (register_model_update)
+  - IPFS uploads/downloads
+  - Aggregation operations
+  - Validation operations
+  - Training operations
+  - Rollback operations
+
+- **Throughput**: 
+  - Operations per second
+  - Data transfer rates (network I/O)
+  - Model updates processed per iteration
+
+#### **System Metrics**
+- **CPU Usage**: Total CPU time used per iteration
+- **Memory Usage**: Average, min, max memory consumption per iteration
+- **Network I/O**: Bytes sent/received, packets sent/received per iteration
+- **Disk I/O**: Read/write operations and throughput per iteration
+
+#### **Training Metrics**
+- Final accuracy
+- Training duration
+- Number of iterations
+- Number of rollbacks
+- Convergence information
+- Client participation statistics
+
+#### **Scenario Tracking**
+- Blockchain enabled/disabled
+- IPFS enabled/disabled
+- Dataset name
+- Number of clients
+- Training configuration (target accuracy, max iterations, etc.)
+
+### Architecture
+
+The metrics system consists of:
+
+1. **MetricsCollector** (`shared/monitoring/metrics.py`)
+   - Collects operation-level timing metrics
+   - Tracks counters and aggregations
+   - Stores detailed timing data with metadata
+   - Tracks system metrics per iteration
+
+2. **SystemMetricsCollector** (`shared/monitoring/system_metrics.py`)
+   - Collects system-level metrics (CPU, memory, network, disk)
+   - Provides summary statistics per iteration
+
+3. **MetricsExporter** (`shared/monitoring/metrics_exporter.py`)
+   - Exports metrics to CSV format
+   - Flattens nested data structures
+   - Handles multiple timing samples
+   - Includes per-iteration system metrics
+
+4. **API Endpoint** (`/api/v1/metrics/save`)
+   - Receives metrics JSON via HTTP POST
+   - Saves to CSV file on local filesystem
+   - Returns path to saved file
+
+5. **Training Completion Integration**
+   - Automatically collects and exports metrics when training completes
+   - Includes training summary and final results
+
+### Usage
+
+#### Starting Training with Scenario Tracking
+
+When starting training via the API, scenario information is automatically captured:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/training/start" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dataset_name": "mnist",
+    "initial_weights_cid": null
+  }'
+```
+
+The system will automatically:
+1. Set scenario information (blockchain/IPFS status, dataset, etc.)
+2. Reset system metrics collection
+3. Begin collecting metrics throughout training
+
+#### Manual Metrics Export
+
+You can manually export metrics at any time:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/metrics/save" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metrics": {
+      "scenario_info": {
+        "blockchain_enabled": true,
+        "ipfs_enabled": true,
+        "dataset_name": "mnist",
+        "num_clients": 5
+      },
+      "operation_metrics": {
+        "blockchain_register": {
+          "count": 10,
+          "total_duration": 5.2,
+          "avg_duration": 0.52,
+          "min_duration": 0.3,
+          "max_duration": 1.1
+        }
+      },
+      "system_metrics": {
+        "cpu": {"total_time_seconds": 12.5},
+        "memory": {"avg_used_bytes": 524288000, "max_used_bytes": 629145600}
+      }
+    },
+    "filename": "my_metrics.csv"
+  }'
+```
+
+#### Automatic Export on Training Completion
+
+When training completes successfully, metrics are automatically exported:
+
+1. All collected metrics are gathered
+2. Training completion information is added
+3. Metrics are exported via the `/save_metrics` endpoint
+4. CSV file is saved with timestamp and scenario info in filename
+
+Example filename: `metrics_20240115_143022_bc_on_ipfs_on.csv`
+
+### CSV Format
+
+The exported CSV file contains flattened metrics with columns like:
+
+- `scenario_blockchain_enabled` (true/false)
+- `scenario_ipfs_enabled` (true/false)
+- `scenario_dataset_name` (e.g., "mnist")
+- `scenario_num_clients` (integer)
+- `system_cpu_total_time_seconds` (float) - per iteration
+- `system_memory_avg_used_bytes` (float) - per iteration
+- `system_memory_max_used_bytes` (float) - per iteration
+- `system_memory_min_used_bytes` (float) - per iteration
+- `system_network_total_bytes_sent` (integer) - per iteration
+- `system_network_total_bytes_recv` (integer) - per iteration
+- `system_disk_total_bytes_read` (integer) - per iteration
+- `system_disk_total_bytes_written` (integer) - per iteration
+- `op_blockchain_register_count` (integer)
+- `op_blockchain_register_avg_duration` (float)
+- `op_blockchain_register_min_duration` (float)
+- `op_blockchain_register_max_duration` (float)
+- `timing_sample_index` (integer) - iteration index
+- `timing_blockchain_register_duration` (float) - individual timing samples
+- `timing_blockchain_register_model_version_id` (string) - metadata
+- `timing_blockchain_register_iteration` (integer) - iteration number
+- `training_completion_final_accuracy` (float)
+- `training_completion_total_iterations` (integer)
+- `training_completion_rollback_count` (integer)
+- ... and more
+
+**Note:** System metrics (CPU, memory, network, disk) are tracked per iteration, so each row in the CSV represents one iteration with its corresponding hardware metrics.
+
+### Research Scenarios
+
+#### Scenario 1: Full System (Blockchain + IPFS)
+- `blockchain_enabled: true`
+- `ipfs_enabled: true`
+- Measures overhead of full decentralized system
+
+#### Scenario 2: IPFS Only (No Blockchain)
+- `blockchain_enabled: false`
+- `ipfs_enabled: true`
+- Measures IPFS overhead without blockchain
+
+#### Scenario 3: Blockchain Only (No IPFS)
+- `blockchain_enabled: true`
+- `ipfs_enabled: false`
+- Measures blockchain overhead without IPFS
+
+#### Scenario 4: Baseline (No Blockchain, No IPFS)
+- `blockchain_enabled: false`
+- `ipfs_enabled: false`
+- Baseline performance for comparison
+
+### Metrics Collected Per Operation
+
+#### Blockchain Operations
+- `blockchain_register`: Model version registration
+  - Duration per operation
+  - Transaction IDs
+  - Model version IDs
+  - Iteration numbers
+
+#### IPFS Operations
+- `ipfs_upload`: Model weight/diff uploads
+  - Duration per upload
+  - File sizes
+  - CID returned
+- `ipfs_download`: Model weight/diff downloads
+  - Duration per download
+  - File sizes
+  - CID requested
+
+#### Aggregation Operations
+- `fedavg_aggregation`: Client update aggregation
+  - Duration per aggregation
+  - Number of clients aggregated
+  - Iteration number
+
+#### Validation Operations
+- `validation`: Model validation
+  - Duration per validation
+  - Accuracy results
+  - Model version ID
+
+#### Training Operations
+- `training`: Client training
+  - Duration per training round
+  - Epochs trained
+  - Samples processed
+
+### Output Directory
+
+By default, CSV files are saved to `./metrics_output/` directory. You can specify a custom directory via the `output_dir` parameter in the `/save_metrics` endpoint.
+
+### Integration Points
+
+#### Training Start
+- Scenario info is set automatically
+- System metrics collection is reset
+- Metrics collection begins
+
+#### During Training
+- All operations record timing metrics
+- System metrics are sampled after each operation with iteration metadata
+- Operation metadata is stored
+- System metrics are tracked per iteration
+
+#### Training Completion
+- Final metrics are collected
+- Training summary is added
+- Metrics are exported to CSV automatically
+
+### CSV Analysis Example
+
+```python
+import pandas as pd
+
+# Load metrics
+df = pd.read_csv('metrics_20240115_143022_bc_on_ipfs_on.csv')
+
+# Compare blockchain operations across iterations
+blockchain_ops = df[df['timing_blockchain_register_duration'].notna()]
+avg_duration = blockchain_ops['timing_blockchain_register_duration'].mean()
+
+# Compare system resources per iteration
+cpu_usage = df['system_cpu_total_time_seconds'].mean()
+memory_usage = df['system_memory_avg_used_bytes'].mean()
+
+# Compare scenarios
+scenarios = pd.read_csv('all_metrics.csv')
+scenarios.groupby(['scenario_blockchain_enabled', 'scenario_ipfs_enabled']).agg({
+    'op_blockchain_register_avg_duration': 'mean',
+    'system_cpu_total_time_seconds': 'mean',
+    'system_memory_avg_used_bytes': 'mean',
+    'training_completion_final_accuracy': 'mean'
+})
+
+# Analyze per-iteration metrics
+iteration_metrics = df.groupby('timing_sample_index').agg({
+    'system_cpu_total_time_seconds': 'first',
+    'system_memory_avg_used_bytes': 'first',
+    'timing_blockchain_register_duration': 'mean'
+})
+```
+
+### Notes
+
+- Metrics are collected in-memory during training
+- CSV export happens at training completion or manually
+- System metrics are sampled after operations with iteration metadata
+- All timings are in seconds
+- File paths are absolute paths on the host system
+- The system handles missing dependencies gracefully (logs warnings)
+- System metrics are tracked per iteration, ensuring each CSV row has iteration-specific hardware metrics
+
 ## Troubleshooting
 
 ### Training Not Starting
@@ -378,3 +671,4 @@ NUM_CLIENTS=2                 # Number of client instances
 3. **View Model Versions**: Use `/api/v1/models` endpoints
 4. **Manual Intervention**: Use rollback endpoint if needed
 5. **Get Final Report**: Check status after completion
+6. **Analyze Metrics**: Review exported CSV files in `./metrics_output/` directory for performance analysis

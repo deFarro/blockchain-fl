@@ -688,7 +688,8 @@ class BlockchainWorker:
                 raise ValueError(f"Expected str, got {type(transaction_id)}")
 
             duration = time.time() - start_time
-            get_metrics_collector().record_timing(
+            metrics_collector = get_metrics_collector()
+            metrics_collector.record_timing(
                 "blockchain_register",
                 duration,
                 metadata={
@@ -697,6 +698,8 @@ class BlockchainWorker:
                     "transaction_id": transaction_id,
                 },
             )
+            # Collect system metrics sample during blockchain operation
+            metrics_collector.collect_system_sample()
 
             logger.info(
                 f"Model version {model_version_id} registered on blockchain: "
@@ -915,6 +918,15 @@ class BlockchainWorker:
                 f"Training completion recorded for version {payload.final_model_version_id}: "
                 f"{completion_info['completion_reason']}"
             )
+
+            # Collect and export metrics
+            try:
+                self._export_training_metrics(payload, completion_info)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to export training metrics: {str(e)}", exc_info=True
+                )
+
             return True
 
         except Exception as e:
@@ -923,6 +935,105 @@ class BlockchainWorker:
                 exc_info=True,
             )
             return False
+
+    def _export_training_metrics(
+        self, payload: TrainingCompleteTaskPayload, completion_info: Dict[str, Any]
+    ) -> None:
+        """
+        Export training metrics to CSV file via API endpoint.
+
+        Args:
+            payload: Training complete payload
+            completion_info: Completion information dictionary
+        """
+        try:
+            import httpx
+            from shared.config import settings
+            from shared.monitoring.metrics import get_metrics_collector
+
+            # Get all collected metrics
+            metrics_collector = get_metrics_collector()
+
+            # Collect final system metrics sample before export
+            metrics_collector.collect_system_sample()
+
+            metrics_data = metrics_collector.get_metrics_for_export()
+
+            # Add training completion information
+            metrics_data["training_completion"] = {
+                "final_model_version_id": payload.final_model_version_id,
+                "final_accuracy": payload.final_accuracy,
+                "final_metrics": payload.final_metrics,
+                "training_summary": payload.training_summary,
+                "completion_reason": completion_info["completion_reason"],
+            }
+
+            # Add scenario info if not already set
+            if not metrics_data.get("scenario_info"):
+                # Try to infer scenario from settings
+                scenario_info = {
+                    "blockchain_enabled": bool(settings.blockchain_service_url),
+                    "ipfs_enabled": bool(settings.ipfs_host),
+                    "num_clients": settings.num_clients,
+                    "target_accuracy": settings.target_accuracy,
+                    "max_iterations": settings.max_iterations,
+                    "max_rollbacks": settings.max_rollbacks,
+                }
+                metrics_data["scenario_info"] = scenario_info
+
+            # Generate filename with timestamp and scenario info
+            from datetime import datetime
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            scenario = metrics_data.get("scenario_info", {})
+            blockchain_status = (
+                "bc_on" if scenario.get("blockchain_enabled") else "bc_off"
+            )
+            ipfs_status = "ipfs_on" if scenario.get("ipfs_enabled") else "ipfs_off"
+            filename = f"metrics_{timestamp}_{blockchain_status}_{ipfs_status}.csv"
+
+            # Call the /save_metrics endpoint
+            api_url = (
+                f"http://{settings.api_host}:{settings.api_port}/api/v1/metrics/save"
+            )
+
+            # Use API key if configured
+            headers = {}
+            if settings.api_key:
+                headers["X-API-Key"] = settings.api_key
+
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    api_url,
+                    json={"metrics": metrics_data, "filename": filename},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                result = response.json()
+                logger.info(
+                    f"Metrics exported successfully: {result.get('csv_path', 'unknown')}"
+                )
+
+        except ImportError:
+            logger.warning(
+                "httpx not available, skipping metrics export. "
+                "Install with: pip install httpx"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to export metrics via API: {str(e)}", exc_info=True)
+            # Fallback: try direct export
+            try:
+                from pathlib import Path
+                from shared.monitoring.metrics_exporter import MetricsExporter
+
+                exporter = MetricsExporter()
+                exporter.export_to_csv(metrics_data, filename)
+                logger.info(f"Metrics exported directly to CSV: {filename}")
+            except Exception as export_error:
+                logger.error(
+                    f"Failed to export metrics directly: {str(export_error)}",
+                    exc_info=True,
+                )
 
     def _handle_blockchain_write_task(self, task: Task) -> bool:
         """

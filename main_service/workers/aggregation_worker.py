@@ -169,7 +169,9 @@ class AggregationWorker:
                     )
 
                 # Download from IPFS
-                logger.debug(f"Downloading weight diff from IPFS: CID={weight_diff_cid}")
+                logger.debug(
+                    f"Downloading weight diff from IPFS: CID={weight_diff_cid}"
+                )
                 weight_diff_str = loop.run_until_complete(
                     self._download_weight_diff_from_ipfs(weight_diff_cid)
                 )
@@ -216,15 +218,25 @@ class AggregationWorker:
                 aggregated[name] += weight_diff[name] * weight
 
         agg_duration = time.time() - agg_start
-        get_metrics_collector().record_timing(
+        metrics_collector = get_metrics_collector()
+
+        # Extract iteration from client updates for metrics
+        iteration = None
+        if client_updates and "iteration" in client_updates[0]:
+            iteration = client_updates[0]["iteration"]
+
+        metrics_collector.record_timing(
             "fedavg_aggregation",
             agg_duration,
             metadata={
+                "iteration": iteration,
                 "num_clients": len(client_updates),
                 "total_samples": total_samples,
                 "excluded_clients": len(exclude_clients) if exclude_clients else 0,
             },
         )
+        # Collect system metrics sample during aggregation
+        metrics_collector.collect_system_sample()
 
         logger.info(
             f"Aggregated {len(client_updates)} client updates "

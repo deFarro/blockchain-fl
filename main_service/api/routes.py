@@ -25,6 +25,8 @@ from main_service.api.models import (
     StartTrainingResponse,
     TrainingStatusResponse,
     ErrorResponse,
+    SaveMetricsRequest,
+    SaveMetricsResponse,
 )
 from main_service.api.auth import verify_api_key
 from main_service.workers.blockchain_worker import BlockchainWorker
@@ -555,6 +557,43 @@ async def start_training(
                 exc_info=True,
             )
 
+        # Set scenario information for metrics collection
+        try:
+            from shared.monitoring.metrics import get_metrics_collector
+
+            scenario_info = {
+                "blockchain_enabled": bool(settings.blockchain_service_url),
+                "ipfs_enabled": bool(settings.ipfs_host),
+                "num_clients": num_clients,
+                "target_accuracy": settings.target_accuracy,
+                "max_iterations": settings.max_iterations,
+                "max_rollbacks": settings.max_rollbacks,
+                "dataset_name": getattr(request, "dataset_name", "unknown"),
+            }
+
+            metrics_collector = get_metrics_collector()
+            metrics_collector.set_scenario_info(scenario_info)
+            metrics_collector.system_metrics.reset()  # Reset system metrics at start
+
+            # Initialize CSV file for incremental metrics export
+            try:
+                from shared.monitoring.metrics_exporter import MetricsExporter
+
+                exporter = MetricsExporter()
+                exporter.initialize_csv_file(scenario_info)
+                logger.info("Initialized CSV file for incremental metrics export")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to initialize CSV file for incremental export: {str(e)}"
+                )
+
+            # Collect initial system metrics sample
+            metrics_collector.collect_system_sample()
+
+            logger.info(f"Scenario info set for metrics collection: {scenario_info}")
+        except Exception as e:
+            logger.warning(f"Failed to set scenario info: {str(e)}")
+
         # Publish a single universal TRAIN task for all clients
         # All clients will process the same task and send their updates
         publish_train_task(
@@ -782,6 +821,59 @@ async def get_training_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting training status: {str(e)}",
+        )
+
+
+@router.post("/metrics/save", response_model=SaveMetricsResponse)
+async def save_metrics(
+    request: SaveMetricsRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """
+    Save metrics to CSV file locally.
+
+    This endpoint receives metrics data in JSON format and saves it as a CSV file
+    on the local filesystem (not inside a container). Useful for benchmarking
+    and research data collection.
+
+    Args:
+        request: Metrics save request with metrics data
+        api_key: API key for authentication
+
+    Returns:
+        Save metrics response with CSV file path
+    """
+    try:
+        from pathlib import Path
+        from shared.monitoring.metrics_exporter import MetricsExporter
+
+        logger.info("Saving metrics to CSV file")
+
+        # Determine output directory
+        output_dir = None
+        if request.output_dir:
+            output_dir = Path(request.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create exporter and export metrics
+        exporter = MetricsExporter(output_dir=output_dir)
+        csv_path = exporter.export_to_csv(request.metrics, request.filename)
+
+        # Convert to string for response (use absolute path)
+        csv_path_str = str(csv_path.absolute())
+
+        logger.info(f"Metrics saved successfully to {csv_path_str}")
+
+        return SaveMetricsResponse(
+            success=True,
+            message=f"Metrics saved successfully to {csv_path_str}",
+            csv_path=csv_path_str,
+        )
+    except Exception as e:
+        logger.error(f"Error saving metrics: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error saving metrics: {str(e)}",
         )
 
 
