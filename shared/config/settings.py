@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     excluded_clients: List[str] = []  # List of client IDs to exclude from aggregation
 
     # Dataset Configuration
-    dataset_name: str = "mnist"  # Dataset to use: mnist, caltech101, usps
+    dataset_name: str = "mnist"  # Dataset to use: mnist, caltech101, usps, cifar10
 
     # Training Configuration
     target_accuracy: float = 95.0  # Target accuracy to achieve (percentage)

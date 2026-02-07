@@ -6,6 +6,7 @@ from shared.datasets.dataset_interface import DatasetInterface
 from shared.datasets.mnist_dataset import MNISTDataset
 from shared.datasets.caltech101_dataset import Caltech101Dataset
 from shared.datasets.usps_dataset import USPSDataset
+from shared.datasets.cifar10_dataset import CIFAR10Dataset
 from shared.config import settings
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "MNISTDataset",
     "Caltech101Dataset",
     "USPSDataset",
+    "CIFAR10Dataset",
     "get_dataset",
 ]
 
@@ -26,7 +28,7 @@ def get_dataset(
     Factory function to get dataset instance based on name.
 
     Args:
-        dataset_name: Name of dataset (e.g., "mnist", "caltech101", "usps"). If None, uses settings.
+        dataset_name: Name of dataset (e.g., "mnist", "caltech101", "usps", "cifar10"). If None, uses settings.
         data_dir: Directory for dataset. If None, uses settings.data_dir / dataset_name.
         seed: Random seed. If None, uses settings.dataset_seed or default 42.
 
@@ -57,8 +59,10 @@ def get_dataset(
         return Caltech101Dataset(data_dir=data_dir, seed=seed)
     if dataset_name_lower == "usps":
         return USPSDataset(data_dir=data_dir, seed=seed)
+    if dataset_name_lower == "cifar10":
+        return CIFAR10Dataset(data_dir=data_dir, seed=seed)
     raise ValueError(
         f"Unsupported dataset: {dataset_name}. "
-        f"Supported datasets: mnist, caltech101, usps"
+        f"Supported datasets: mnist, caltech101, usps, cifar10"
     )
 
