@@ -31,7 +31,7 @@ class ClientConfig(BaseSettings):
     environment: str = "development"
 
     # Dataset Configuration
-    dataset_name: str = "mnist"  # Dataset to use: mnist, caltech101
+    dataset_name: str = "mnist"  # Dataset to use: mnist, caltech101, usps
 
     # Training Configuration
     epochs: int = 1  # Number of epochs per training iteration
@@ -42,7 +42,7 @@ class ClientConfig(BaseSettings):
 
     @property
     def data_dir(self) -> str:
-        """Dataset directory, derived from dataset_name (e.g. data/mnist, data/caltech101)."""
+        """Dataset directory, derived from dataset_name (e.g. data/mnist, data/caltech101, data/usps)."""
         return f"data/{self.dataset_name}"
 
     @property

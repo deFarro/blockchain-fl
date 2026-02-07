@@ -3,7 +3,7 @@ Download a single dataset at Docker build time (driven by DATASET_NAME from .env
 
 Usage:
   python download_datasets.py DATASET_NAME [BASE_DIR]
-  DATASET_NAME: mnist or caltech101 (must match .env).
+  DATASET_NAME: mnist, caltech101, or usps (must match .env).
   BASE_DIR defaults to /app/data (dataset goes to BASE_DIR/DATASET_NAME).
 
 Uses only torchvision (no project imports). Run with PYTHONPATH unset if needed.
@@ -38,9 +38,18 @@ def main() -> None:
         print("Downloading Caltech101...", flush=True)
         Caltech101(root=caltech_root, target_type="category", download=True)
         print("Caltech101 ready at", caltech_root, flush=True)
+    elif dataset_name == "usps":
+        from torchvision.datasets import USPS
+
+        usps_root = os.path.join(base_dir, "usps")
+        print("Downloading USPS (train)...", flush=True)
+        USPS(root=usps_root, train=True, download=True)
+        print("Downloading USPS (test)...", flush=True)
+        USPS(root=usps_root, train=False, download=True)
+        print("USPS ready at", usps_root, flush=True)
     else:
         print(
-            f"Unknown dataset: {dataset_name}. Supported: mnist, caltech101",
+            f"Unknown dataset: {dataset_name}. Supported: mnist, caltech101, usps",
             file=sys.stderr,
         )
         sys.exit(1)

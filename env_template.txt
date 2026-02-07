@@ -51,6 +51,9 @@ ACCURACY_TOLERANCE=0.5        # Allowed accuracy drop (0.5%)
 PATIENCE_THRESHOLD=3          # Consecutive bad iterations before rollback
 SEVERE_DROP_THRESHOLD=2.0     # Immediate rollback threshold (2%)
 
+# Dataset Configuration
+DATASET_NAME=mnist            # Dataset to use: mnist, caltech101, usps (data path is data/<name>)
+
 # Client Configuration
 NUM_CLIENTS=2                 # Number of client instances
 EPOCHS=10                     # Epochs per training iteration
