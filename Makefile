@@ -3,7 +3,7 @@
 help:
 	@echo "Available commands:"
 	@echo "  make build           - Build Docker images (datasets once, then main + client)"
-	@echo "  make up              - Start all services"
+	@echo "  make up              - Start all services (adds unreliable client if ADD_UNRELIABLE_CLIENT=true in .env)"
 	@echo "  make down            - Stop all services"
 	@echo "  make logs            - View logs from all services"
 	@echo "  make clean           - Remove containers, volumes, and images"
@@ -25,6 +25,7 @@ build:
 	@echo "Building main-service and client-service (copy dataset from datasets image)..."
 	@docker-compose build main-service client-service
 
+# If ADD_UNRELIABLE_CLIENT=true|1|yes in .env, include unreliable-client profile
 up:
 	@if [ -f .env ]; then \
 		set -a; \
@@ -32,18 +33,30 @@ up:
 		set +a; \
 	fi; \
 	NUM_CLIENTS=$${NUM_CLIENTS:-2}; \
-	echo "Starting services with $$NUM_CLIENTS client(s)..."; \
-	docker-compose up --scale client-service=$$NUM_CLIENTS
+	PROFILE_ARG=; \
+	if [ -f .env ] && grep -qE '^ADD_UNRELIABLE_CLIENT=(true|1|yes)([[:space:]]*#.*)?$$' .env 2>/dev/null; then \
+		PROFILE_ARG='--profile unreliable'; \
+		echo "Starting services with $$NUM_CLIENTS client(s) and unreliable client (ADD_UNRELIABLE_CLIENT=true)..."; \
+	else \
+		echo "Starting services with $$NUM_CLIENTS client(s)..."; \
+	fi; \
+	docker compose $$PROFILE_ARG up --scale client-service=$$NUM_CLIENTS
 
 down:
-	docker-compose down
+	@PROFILE_ARG=; \
+	if [ -f .env ] && grep -qE '^ADD_UNRELIABLE_CLIENT=(true|1|yes)([[:space:]]*#.*)?$$' .env 2>/dev/null; then PROFILE_ARG='--profile unreliable'; fi; \
+	docker compose $$PROFILE_ARG down
 
 logs:
-	docker-compose logs -f
+	@PROFILE_ARG=; \
+	if [ -f .env ] && grep -qE '^ADD_UNRELIABLE_CLIENT=(true|1|yes)([[:space:]]*#.*)?$$' .env 2>/dev/null; then PROFILE_ARG='--profile unreliable'; fi; \
+	docker compose $$PROFILE_ARG logs -f
 
 clean:
-	docker-compose down -v
-	docker-compose rm -f
+	@PROFILE_ARG=; \
+	if [ -f .env ] && grep -qE '^ADD_UNRELIABLE_CLIENT=(true|1|yes)([[:space:]]*#.*)?$$' .env 2>/dev/null; then PROFILE_ARG='--profile unreliable'; fi; \
+	docker compose $$PROFILE_ARG down -v; \
+	docker compose $$PROFILE_ARG rm -f 2>/dev/null || true; \
 	docker system prune -f
 
 # Test targets (local development)

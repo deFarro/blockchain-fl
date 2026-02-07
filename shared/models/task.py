@@ -89,6 +89,10 @@ class RollbackTaskPayload(TaskPayload):
     cutoff_version_id: Optional[str] = Field(
         None, description="Version ID after which updates should be discarded"
     )
+    excluded_client_ids: Optional[List[str]] = Field(
+        None,
+        description="Client IDs to exclude from aggregation after rollback (identified as unreliable)",
+    )
 
 
 class DecisionTaskPayload(TaskPayload):

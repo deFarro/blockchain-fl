@@ -1,7 +1,8 @@
 """Decision worker that makes rollback/training decisions based on validation results."""
 
+import asyncio
 import time
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 from shared.queue.consumer import QueueConsumer
 from shared.queue.publisher import QueuePublisher
@@ -18,6 +19,12 @@ from shared.models.task import (
 from shared.config import settings
 from shared.logger import setup_logger
 from shared.utils.training import publish_train_task
+from main_service.blockchain.fabric_client import FabricClient
+from main_service.workers.rollback_target import (
+    identify_unreliable_clients,
+    find_rollback_target_without_clients,
+    get_parent_version_and_cid,
+)
 
 logger = setup_logger(__name__)
 
@@ -180,15 +187,23 @@ class DecisionWorker:
                 "Investigation recommended."
             )
 
-        # Check convergence (no improvement for N iterations)
-        if len(self.state.accuracy_history) >= self.convergence_patience:
+        # Check convergence (no improvement by at least ACCURACY_TOLERANCE for N iterations)
+        # Use best accuracy *before* the last N iterations as baseline (not all-time best),
+        # so we don't trigger convergence right after setting a new best.
+        if len(self.state.accuracy_history) > self.convergence_patience:
             recent_accuracies = self.state.accuracy_history[
                 -self.convergence_patience :
             ]
-            if all(acc <= self.state.best_accuracy for acc in recent_accuracies):
+            best_before_window = max(
+                self.state.accuracy_history[: -self.convergence_patience]
+            )
+            improvement_threshold = best_before_window + self.accuracy_tolerance
+            if max(recent_accuracies) < improvement_threshold:
                 return True, (
-                    f"Convergence detected: No improvement for {self.convergence_patience} "
-                    f"consecutive iterations (best: {self.state.best_accuracy:.2f}%)"
+                    f"Convergence detected: No improvement of at least {self.accuracy_tolerance:.2f}% "
+                    f"for {self.convergence_patience} consecutive iterations "
+                    f"(best before window: {best_before_window:.2f}%, best overall: {self.state.best_accuracy:.2f}%, "
+                    f"threshold: {improvement_threshold:.2f}%)"
                 )
 
         return False, None
@@ -211,7 +226,11 @@ class DecisionWorker:
         )
 
     def _publish_rollback_task(
-        self, target_version_id: str, target_weights_cid: str, reason: str
+        self,
+        target_version_id: str,
+        target_weights_cid: str,
+        reason: str,
+        excluded_client_ids: Optional[List[str]] = None,
     ) -> None:
         """
         Publish ROLLBACK task.
@@ -220,18 +239,30 @@ class DecisionWorker:
             target_version_id: Version ID to rollback to
             target_weights_cid: IPFS CID of rolled-back weights
             reason: Reason for rollback
+            excluded_client_ids: Client IDs to exclude from aggregation after rollback (identified as unreliable)
         """
-        logger.info(f"Publishing ROLLBACK task to version {target_version_id}")
+        logger.info(
+            f"Publishing ROLLBACK task to version {target_version_id}"
+            + (
+                f", exclude clients: {excluded_client_ids}"
+                if excluded_client_ids
+                else ""
+            )
+        )
+
+        payload_dict: Dict[str, Any] = {
+            "target_version_id": target_version_id,
+            "target_weights_cid": target_weights_cid,
+            "reason": reason,
+            "cutoff_version_id": None,
+        }
+        if excluded_client_ids:
+            payload_dict["excluded_client_ids"] = excluded_client_ids
 
         rollback_task = Task(
             task_id=f"rollback-{target_version_id}-{int(time.time() * 1000)}",
             task_type=TaskType.ROLLBACK,
-            payload=RollbackTaskPayload(
-                target_version_id=target_version_id,
-                target_weights_cid=target_weights_cid,
-                reason=reason,
-                cutoff_version_id=None,  # TODO: Set cutoff version
-            ).model_dump(),
+            payload=RollbackTaskPayload(**payload_dict).model_dump(),
             metadata=TaskMetadata(source="decision_worker"),
             model_version_id=target_version_id,
             parent_version_id=None,
@@ -390,26 +421,74 @@ class DecisionWorker:
                 if not self.state.best_checkpoint_cid:
                     raise ValueError("Cannot rollback: best_checkpoint_cid is not set")
 
-                # Publish rollback task
+                # Identify unreliable clients by testing each diff individually (leave-one-out)
+                # and find rollback target = last version that didn't have those clients in provenance
+                target_version_id = self.state.best_checkpoint_version
+                target_weights_cid = self.state.best_checkpoint_cid
+                excluded_client_ids: List[str] = []
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_closed():
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                async def _resolve_rollback_target():
+                    async with FabricClient() as blockchain_client:
+                        unreliable = await identify_unreliable_clients(
+                            blockchain_client,
+                            bad_version_id=model_version_id,
+                            good_version_id=self.state.best_checkpoint_version,
+                            baseline_accuracy=self.state.best_accuracy,
+                        )
+                        if unreliable:
+                            parent_id, _ = await get_parent_version_and_cid(
+                                blockchain_client, model_version_id
+                            )
+                            if parent_id:
+                                tid, cid = await find_rollback_target_without_clients(
+                                    blockchain_client, parent_id, unreliable
+                                )
+                                if tid and cid:
+                                    return tid, cid, unreliable
+                        return (
+                            self.state.best_checkpoint_version,
+                            self.state.best_checkpoint_cid,
+                            unreliable,
+                        )
+
+                try:
+                    target_version_id, target_weights_cid, excluded_client_ids = (
+                        loop.run_until_complete(_resolve_rollback_target())
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Could not resolve rollback target from provenance: {e}. "
+                        "Using best checkpoint.",
+                        exc_info=True,
+                    )
+
+                # Publish rollback task (with excluded_client_ids so rollback worker excludes them).
+                # Do not publish TRAIN here: rollback worker will apply exclusion then publish
+                # the single resumption TRAIN (next iteration from blockchain). Otherwise we'd
+                # publish two TRAINs (e.g. iter 2 and iter 3) and one client's updates can be
+                # for the wrong iteration and never aggregated.
                 self.state.rollback_count += 1
-                # Update shared state
                 self._publish_rollback_task(
-                    target_version_id=self.state.best_checkpoint_version,
-                    target_weights_cid=self.state.best_checkpoint_cid,
+                    target_version_id=target_version_id,
+                    target_weights_cid=target_weights_cid,
                     reason=rollback_reason or "Automatic rollback",
+                    excluded_client_ids=excluded_client_ids or None,
                 )
 
                 # Reset patience after rollback
                 self.state.patience_counter = 0
 
-                # Publish TRAIN tasks to continue from rolled-back state
-                self._publish_train_tasks(
-                    iteration=self.state.current_iteration,
-                    weights_cid=self.state.best_checkpoint_cid,
-                )
-
                 logger.info(
-                    f"Rollback completed. Continuing training from iteration {self.state.current_iteration}"
+                    "Rollback task published; rollback worker will apply exclusion and resume training"
                 )
                 return True
 

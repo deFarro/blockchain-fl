@@ -327,9 +327,10 @@ def test_decision_worker_check_completion_convergence():
 
     worker = DecisionWorker()
     worker.convergence_patience = 5
+    worker.accuracy_tolerance = 0.5
     worker.state.best_accuracy = 95.0
-    # Add 5 consecutive accuracies at or below best
-    worker.state.accuracy_history = [94.0, 94.5, 94.0, 94.5, 94.0]
+    # Need > N entries: best before last 5 was 95.0; last 5 never reached 95.0 + 0.5
+    worker.state.accuracy_history = [95.0, 94.0, 94.5, 94.0, 94.5, 94.0]
 
     validation_result = {
         "model_version_id": "version_6",
@@ -603,16 +604,15 @@ def test_decision_worker_handle_decision_rollback():
     ]
     assert len(rollback_calls) == 1
 
-    # Verify universal TRAIN task was published (to continue from rollback via fanout exchange)
+    # Decision worker does NOT publish TRAIN after rollback: rollback worker applies
+    # exclusion and publishes the single resumption TRAIN (avoids duplicate TRAINs).
     train_calls = [
         call
         for call in mock_publisher.publish_task.call_args_list
         if call.kwargs["task"].task_type == TaskType.TRAIN
     ]
-    assert len(train_calls) == 1  # Single universal task via fanout exchange
-    # Verify fanout exchange is used
-    assert train_calls[0].kwargs.get("use_fanout") == True, "Should use fanout exchange for universal tasks"
-    print("✓ Rollback correctly triggered, ROLLBACK and universal TRAIN task published via fanout exchange")
+    assert len(train_calls) == 0, "Decision worker should not publish TRAIN after rollback (rollback worker resumes)"
+    print("✓ Rollback correctly triggered, ROLLBACK published; rollback worker will resume training")
 
     print("=" * 60)
     print("✓ Test PASSED")

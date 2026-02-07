@@ -2,6 +2,8 @@
 
 import json
 from typing import Dict, Any, List, Optional, Tuple
+
+import copy
 import torch
 import torch.nn.functional as F
 from shared.logger import setup_logger
@@ -155,6 +157,98 @@ class RegressionDiagnosis:
             )
 
         return problematic_clients
+
+    def diagnose_regression_leave_one_out(
+        self,
+        previous_weights: Dict[str, Any],
+        client_updates: List[Dict[str, Any]],
+        test_loader: Any,
+        baseline_accuracy: float,
+        accuracy_threshold: float = 0.5,
+    ) -> List[str]:
+        """
+        Identify problematic clients by leave-one-out: for each client X, aggregate
+        the diffs of all *other* clients, apply to parent weights, and validate.
+        If accuracy without X is acceptable (>= baseline - threshold), then X was
+        the culprit and we flag X. This avoids falsely flagging good clients whose
+        single-client update alone would look bad.
+
+        Args:
+            previous_weights: Parent (good) model weights
+            client_updates: List of dicts with "client_id" and "weight_diff" (JSON str)
+            test_loader: DataLoader for test dataset
+            baseline_accuracy: Good version accuracy to compare against
+            accuracy_threshold: Accuracy without X must be >= baseline - threshold to flag X
+
+        Returns:
+            List of client IDs to exclude (those whose removal restores good accuracy)
+        """
+        problematic: List[str] = []
+        n = len(client_updates)
+        if n == 0:
+            return []
+
+        # Parse all diffs to tensors
+        diffs: List[Tuple[str, Dict[str, Any]]] = []
+        for update in client_updates:
+            cid = update.get("client_id", "unknown")
+            wstr = update.get("weight_diff", "")
+            if not wstr:
+                logger.warning(f"Client {cid} has no weight_diff, skipping")
+                continue
+            try:
+                d = json.loads(wstr)
+                diff = {k: torch.tensor(v) for k, v in d.items()}
+                diffs.append((cid, diff))
+            except Exception as e:
+                logger.error(f"Failed to parse diff for {cid}: {e}")
+                continue
+
+        if len(diffs) < 2:
+            logger.info("Leave-one-out needs at least 2 clients, skipping")
+            return []
+
+        logger.info(
+            f"Leave-one-out diagnosis: testing exclusion of each of {len(diffs)} clients. "
+            f"Baseline accuracy: {baseline_accuracy:.2f}%"
+        )
+        min_acceptable = baseline_accuracy - accuracy_threshold
+
+        for i, (excluded_id, _) in enumerate(diffs):
+            # Aggregate diffs of all clients except i (equal weights)
+            others = [d for j, (_, d) in enumerate(diffs) if j != i]
+            avg_diff = {}
+            for name in others[0].keys():
+                avg_diff[name] = sum(o[name] for o in others) / len(others)
+
+            self.model.set_weights(copy.deepcopy(previous_weights))
+            self.model.apply_weight_diff(avg_diff)
+            self.model.eval()
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for data, target in test_loader:
+                    output = self.model(data)
+                    pred = output.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    total += target.size(0)
+            acc = 100.0 * correct / total if total else 0.0
+
+            logger.info(
+                f"Without client {excluded_id}: accuracy={acc:.2f}% "
+                f"(min acceptable={min_acceptable:.2f}%)"
+            )
+            if acc >= min_acceptable:
+                problematic.append(excluded_id)
+                logger.warning(
+                    f"Client {excluded_id} flagged: accuracy without them is {acc:.2f}% (acceptable)"
+                )
+
+        if problematic:
+            logger.warning(
+                f"Leave-one-out identified problematic client(s): {problematic}"
+            )
+        return problematic
 
     def test_client_combinations(
         self,

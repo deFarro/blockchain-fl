@@ -1,7 +1,7 @@
 """Rollback worker that handles rollback operations."""
 
 import asyncio
-from typing import Optional, cast, Dict, Any
+from typing import Optional, List, cast, Dict, Any
 from shared.queue.consumer import QueueConsumer
 from shared.queue.publisher import QueuePublisher
 from shared.queue.connection import QueueConnection
@@ -251,6 +251,7 @@ class RollbackWorker:
         target_weights_cid: str,
         reason: str,
         cutoff_version_id: Optional[str],
+        excluded_client_ids: Optional[List[str]] = None,
     ) -> bool:
         """
         Process rollback operation.
@@ -260,6 +261,7 @@ class RollbackWorker:
             target_weights_cid: IPFS CID of target weights
             reason: Reason for rollback
             cutoff_version_id: Version ID after which updates should be discarded
+            excluded_client_ids: Client IDs to exclude from aggregation (identified as unreliable)
 
         Returns:
             True if successful, False otherwise
@@ -292,6 +294,15 @@ class RollbackWorker:
             f"tx_id={transaction_id}"
         )
 
+        # After successful rollback, exclude unreliable clients (identified at rollback time)
+        if excluded_client_ids:
+            for cid in excluded_client_ids:
+                if cid and cid not in settings.excluded_clients:
+                    settings.excluded_clients.append(cid)
+            logger.info(
+                f"Rollback exclusion applied: added {excluded_client_ids} to excluded_clients"
+            )
+
         # After successful rollback, check if training should continue
         await self._check_and_resume_training(target_version_id, target_weights_cid)
 
@@ -317,6 +328,7 @@ class RollbackWorker:
             target_weights_cid = payload.target_weights_cid
             reason = payload.reason
             cutoff_version_id = payload.cutoff_version_id
+            excluded_client_ids = getattr(payload, "excluded_client_ids", None)
 
             # Run async rollback processing
             # Create new event loop if one doesn't exist in this thread
@@ -333,6 +345,7 @@ class RollbackWorker:
                     target_weights_cid,
                     reason,
                     cutoff_version_id,
+                    excluded_client_ids=excluded_client_ids,
                 )
             )
 

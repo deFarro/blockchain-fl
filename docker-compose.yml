@@ -101,6 +101,7 @@ services:
       - PATIENCE_THRESHOLD=${PATIENCE_THRESHOLD:-3}
       - SEVERE_DROP_THRESHOLD=${SEVERE_DROP_THRESHOLD:-2.0}
       - NUM_CLIENTS=${NUM_CLIENTS:-2}
+      - ADD_UNRELIABLE_CLIENT=${ADD_UNRELIABLE_CLIENT:-false}
     volumes:
       - ./shared:/app/shared  # Mount shared code for development
       - ./main_service:/app/main_service  # Mount main service code for development
@@ -147,6 +148,37 @@ services:
     restart: unless-stopped
     # Use: docker-compose up --scale client-service=2
     # Each replica gets unique HOSTNAME: blockchain-fl-client-service-1, blockchain-fl-client-service-2, etc.
+
+  # Unreliable client: posts random weight diffs to test rollback and client exclusion.
+  # Started when ADD_UNRELIABLE_CLIENT=true in .env and you run "make up"
+  unreliable-client:
+    build:
+      context: .
+      dockerfile: client_service/Dockerfile
+    image: blockchain-fl-client-service:latest
+    container_name: blockchain-fl-unreliable-client
+    profiles:
+      - unreliable
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-admin}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-admin}
+      - IPFS_HOST=ipfs
+      - IPFS_PORT=5001
+      - DATASET_NAME=${DATASET_NAME:-mnist}
+      - NUM_CLIENTS=${NUM_CLIENTS:-2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./shared:/app/shared
+      - ./client_service:/app/client_service
+    command: ["python", "-m", "client_service.unreliable_main"]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - blockchain-fl-network
+    restart: unless-stopped
 
 volumes:
   rabbitmq_data:

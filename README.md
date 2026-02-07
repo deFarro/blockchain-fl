@@ -482,13 +482,13 @@ When a model regression is detected (accuracy drops), the system can diagnose wh
      - Compare accuracy with baseline
    - Identify which client(s) caused the regression
 
-3. **Exclude from Future Iterations**: When `enable_client_exclusion=True` and problematic clients identified:
-   - Add problematic client IDs to `excluded_clients` list
-   - **Future aggregations** will filter out excluded clients
-   - Only "good" clients participate in future iterations
-   - System continues training without problematic clients
+3. **Exclude from Future Iterations**: When problematic clients are identified at rollback (by testing each client's diff individually):
+   - Their IDs are added to `excluded_clients` (runtime list, not from env)
+   - **Future aggregations** always filter out excluded clients
+   - Only non-excluded clients participate in future iterations
+   - No configuration needed: unreliable clients are identified at rollback time and excluded automatically
 
-**Key Point**: Exclusion only happens AFTER regression diagnosis. Normal aggregation includes ALL clients (optimized for common case - no regression).
+**Key Point**: Exclusion is applied automatically after rollback when unreliable clients are identified. Normal aggregation includes all non-excluded clients.
 
 **Example:**
 
@@ -505,8 +505,7 @@ Result: Exclude Client 3 from future iterations
 
 **Configuration:**
 
-- `enable_client_exclusion`: Enable/disable client exclusion
-- `excluded_clients`: List of client IDs to exclude from aggregation
+- Unreliable clients are identified at rollback time (each diff tested individually) and excluded automatically; no env vars required.
 
 **Limitations:**
 
@@ -560,7 +559,7 @@ When any completion criterion is met:
 **8. Configuration Parameters:**
 
 - `target_accuracy`: Minimum accuracy to achieve (default: configurable)
-- `convergence_patience`: Iterations without improvement before convergence (default: 10)
+- `convergence_patience`: Iterations without improvement of at least `accuracy_tolerance` before convergence (default: 10)
 - `max_iterations`: Maximum training rounds (default: 100)
 - `max_rollbacks`: Maximum rollbacks before stopping (default: 5)
 - `overtraining_threshold`: Validation accuracy gap threshold (default: configurable)
@@ -576,8 +575,7 @@ When any completion criterion is met:
 
 **Scenario 2: Convergence**
 
-- Accuracy stays at 92% for 10 consecutive iterations
-- No improvement detected
+- For 10 consecutive iterations, accuracy never improved by at least `accuracy_tolerance` (e.g. 0.5%) over the best
 - Training stops, model marked as ready
 - Completion reason: "Convergence detected"
 

@@ -546,12 +546,16 @@ def test_collect_client_updates_early_completion():
     print("=" * 60)
     print()
 
-    # Save original num_clients setting
+    # Save original settings (expected_clients = num_clients when no unreliable / exclusions)
     original_num_clients = settings.num_clients
+    original_add_unreliable = getattr(settings, "add_unreliable_client", False)
+    original_excluded = getattr(settings, "excluded_clients", [])
 
     try:
         # Set up test scenario: 3 total clients, min 2 required
         settings.num_clients = 3
+        settings.add_unreliable_client = False
+        settings.excluded_clients = []
         min_clients = 2
         timeout = 3  # Longer timeout
 
@@ -667,8 +671,10 @@ def test_collect_client_updates_early_completion():
         print(f"✓ Correctly stopped early when all clients responded")
 
     finally:
-        # Restore original setting
+        # Restore original settings
         settings.num_clients = original_num_clients
+        settings.add_unreliable_client = original_add_unreliable
+        settings.excluded_clients = original_excluded
 
     print("=" * 60)
     print("✓ Test PASSED")

@@ -53,11 +53,9 @@ class Settings(BaseSettings):
     min_clients_for_aggregation: int = 1
     aggregation_timeout: int = 60  # seconds to wait for client updates
 
-    # Client Exclusion Configuration (for regression diagnosis)
-    enable_client_exclusion: bool = (
-        False  # Enable client exclusion after regression diagnosis
-    )
-    excluded_clients: List[str] = []  # List of client IDs to exclude from aggregation
+    # Client exclusion: populated at rollback when unreliable clients are identified (individual-diff diagnosis)
+    excluded_clients: List[str] = []  # Client IDs to exclude from aggregation (no env; set at runtime)
+    add_unreliable_client: bool = False
 
     # Dataset Configuration
     dataset_name: str = "mnist"  # Dataset to use: mnist, caltech101, usps, cifar10
@@ -66,8 +64,8 @@ class Settings(BaseSettings):
     target_accuracy: float = 95.0  # Target accuracy to achieve (percentage)
     max_iterations: int = 100  # Maximum training iterations
     max_rollbacks: int = 5  # Maximum rollbacks before stopping
-    convergence_patience: int = 10  # Iterations without improvement before convergence
-    accuracy_tolerance: float = 0.5  # Allowed accuracy drop (percentage)
+    convergence_patience: int = 10  # Iterations without improvement of >= accuracy_tolerance before convergence
+    accuracy_tolerance: float = 0.5  # Rollback: allowed drop; convergence: min improvement to count as "improved" (%)
     patience_threshold: int = 3  # Consecutive bad iterations before rollback
     severe_drop_threshold: float = 2.0  # Immediate rollback threshold (percentage)
     num_clients: int = 2  # Number of client instances

@@ -271,12 +271,23 @@ class AggregationWorker:
         # Set current iteration being processed
         self.current_iteration = iteration
 
-        num_clients = settings.num_clients  # Total number of registered clients
+        # Expected number of senders: when ADD_UNRELIABLE_CLIENT and no exclusions, expect num_clients+1.
+        # After exclusions, only non-excluded send, so expect num_clients.
+        num_clients = settings.num_clients
+        if settings.excluded_clients:
+            expected_clients = num_clients  # Excluded don't send; expect the rest (normal pool)
+        elif settings.add_unreliable_client:
+            expected_clients = num_clients + 1  # Unreliable container is running
+        else:
+            expected_clients = num_clients
+        expected_clients = max(expected_clients, min_clients)
         logger.info(
             f"Collecting client updates for iteration {iteration} "
-            f"(min_clients={min_clients}, total_clients={num_clients}, timeout={timeout}s). "
-            f"Will wait for timeout unless all {num_clients} clients respond."
+            f"(min_clients={min_clients}, expected={expected_clients}, timeout={timeout}s). "
+            f"Will wait for {expected_clients} updates or timeout."
         )
+
+        excluded = getattr(settings, "excluded_clients", None) or []
 
         def message_handler(message: Dict[str, Any]):
             """Handle received client update message."""
@@ -300,11 +311,18 @@ class AggregationWorker:
             )
 
             if msg_iteration == iteration:
+                # Do not count excluded clients toward expected_clients (only wait for non-excluded)
+                if client_id in excluded:
+                    logger.info(
+                        f"Ignoring update from excluded client {client_id} for iteration {iteration} "
+                        f"(not counted toward {expected_clients} expected)"
+                    )
+                    return
                 # This is the iteration we're collecting for
                 updates.append(message)
                 logger.info(
                     f"Received update from {client_id} "
-                    f"for iteration {iteration} ({len(updates)}/{num_clients} clients, min: {min_clients})"
+                    f"for iteration {iteration} ({len(updates)}/{expected_clients} clients, min: {min_clients})"
                 )
             elif msg_iteration is not None and msg_iteration < iteration:
                 # Late update for a past iteration - reject it
@@ -515,27 +533,32 @@ class AggregationWorker:
                     logger.warning(
                         f"Timeout reached ({timeout}s, elapsed: {elapsed:.2f}s) "
                         f"while collecting updates. "
-                        f"Got {len(updates)} updates processed (required: {min_clients}, total clients: {num_clients}), "
+                        f"Got {len(updates)} updates (min: {min_clients}, expected: {expected_clients}), "
                         f"{queued_count} messages queued. "
                         f"Will continue processing queued messages..."
                     )
                     # Don't break immediately - allow processing of messages already in queue
 
-                # Only break early if we have updates from ALL registered clients
-                # Otherwise, wait for the full timeout to collect as many as possible
-                if len(updates) >= num_clients:
+                # Break early when we have expected number of updates (all current senders)
+                if len(updates) >= expected_clients:
                     elapsed = current_time - start_time
                     logger.info(
-                        f"Collected updates from all {len(updates)} registered clients "
+                        f"Collected updates from all {len(updates)} expected clients "
                         f"in {elapsed:.2f}s (early completion)"
                     )
                     break
 
-                # If we have minimum clients but not all clients, and deadline has passed, break
+                # If we have minimum clients and deadline has passed, break
                 if deadline_passed and len(updates) >= min_clients:
                     elapsed = current_time - start_time
+                    if len(updates) < expected_clients:
+                        logger.warning(
+                            f"Timeout ({timeout}s) reached with only {len(updates)}/{expected_clients} client updates. "
+                            f"Slower clients may not have finished training in time. "
+                            f"Consider increasing aggregation_timeout in configuration if you expect more clients."
+                        )
                     logger.info(
-                        f"Collected {len(updates)} updates (required: {min_clients}, total clients: {num_clients}) "
+                        f"Collected {len(updates)} updates (min: {min_clients}, expected: {expected_clients}) "
                         f"after timeout in {elapsed:.2f}s"
                     )
                     break
@@ -571,7 +594,7 @@ class AggregationWorker:
                         queued_count = message_queue.qsize()
                         logger.warning(
                             f"No more messages in queue after timeout. "
-                            f"Got {len(updates)} updates processed (required: {min_clients}, total clients: {num_clients}), "
+                            f"Got {len(updates)} updates (min: {min_clients}, expected: {expected_clients}), "
                             f"{queued_count} messages still queued "
                             f"after {elapsed:.2f}s"
                         )
@@ -613,7 +636,7 @@ class AggregationWorker:
             elapsed_total = time.time() - start_time
             logger.info(
                 f"Collection completed: {len(updates)} updates collected in {elapsed_total:.2f}s "
-                f"(timeout: {timeout}s, required: {min_clients}, total clients: {num_clients})"
+                f"(timeout: {timeout}s, min: {min_clients}, expected: {expected_clients})"
             )
 
         return updates
@@ -658,11 +681,18 @@ class AggregationWorker:
 
         aggregated_str = json.dumps(aggregated_dict)
 
+        # Per-client weight diff CIDs for regression diagnosis (leave-one-out)
+        client_weight_diff_cids = {
+            update["client_id"]: update["weight_diff_cid"]
+            for update in client_updates
+            if update.get("weight_diff_cid")
+        }
         return {
             "aggregated_diff": aggregated_str,
             "iteration": iteration,
             "num_clients": len(client_updates),
             "client_ids": [update["client_id"] for update in client_updates],
+            "client_weight_diff_cids": client_weight_diff_cids,
         }
 
     def _publish_aggregated_update(self, aggregated_data: Dict[str, Any]) -> None:
@@ -723,6 +753,7 @@ class AggregationWorker:
                 "iteration": aggregated_data["iteration"],
                 "num_clients": aggregated_data["num_clients"],
                 "client_ids": aggregated_data["client_ids"],
+                "client_weight_diff_cids": aggregated_data.get("client_weight_diff_cids"),
             },
             metadata=TaskMetadata(source="aggregation_worker"),
             model_version_id=None,  # Will be generated by blockchain worker
@@ -781,9 +812,9 @@ class AggregationWorker:
                 )
                 return False
 
-            # Filter excluded clients if exclusion is enabled
+            # Always filter out excluded clients (identified as unreliable at rollback time)
             original_count = len(client_updates)
-            if settings.enable_client_exclusion and settings.excluded_clients:
+            if settings.excluded_clients:
                 excluded_clients = settings.excluded_clients
                 client_updates = [
                     update

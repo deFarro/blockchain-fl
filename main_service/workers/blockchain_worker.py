@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Optional, Dict, Any, cast
+from typing import Optional, Dict, Any, List, cast
 from shared.queue.consumer import QueueConsumer
 from shared.queue.publisher import QueuePublisher
 from shared.queue.connection import QueueConnection
@@ -725,6 +725,7 @@ class BlockchainWorker:
         iteration: int,
         num_clients: int,
         client_ids: list,
+        client_weight_diff_cids: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Process blockchain write operation.
@@ -734,6 +735,7 @@ class BlockchainWorker:
             iteration: Training iteration number
             num_clients: Number of clients that participated
             client_ids: List of client IDs that contributed
+            client_weight_diff_cids: Optional map client_id -> IPFS CID for leave-one-out diagnosis
 
         Returns:
             Dictionary with model_version_id, parent_version_id, blockchain_hash, transaction_id
@@ -797,6 +799,8 @@ class BlockchainWorker:
             "validation_history": validation_history,  # Carried forward from parent
             # ipfs_cid will be added later by storage worker
         }
+        if client_weight_diff_cids:
+            metadata["client_weight_diff_cids"] = client_weight_diff_cids
 
         # Register on blockchain
         transaction_id = await self._register_on_blockchain(
@@ -1096,6 +1100,7 @@ class BlockchainWorker:
 
             num_clients = payload.get("num_clients", 0)
             client_ids = payload.get("client_ids", [])
+            client_weight_diff_cids = payload.get("client_weight_diff_cids") or None
 
             # Run async blockchain processing (reuse the same event loop)
             result = loop.run_until_complete(
@@ -1104,6 +1109,7 @@ class BlockchainWorker:
                     iteration=iteration,
                     num_clients=num_clients,
                     client_ids=client_ids,
+                    client_weight_diff_cids=client_weight_diff_cids,
                 )
             )
 

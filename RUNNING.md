@@ -335,7 +335,7 @@ Training behavior is controlled via environment variables in `.env`:
 TARGET_ACCURACY=95.0          # Target accuracy to achieve
 MAX_ITERATIONS=100            # Maximum training iterations
 MAX_ROLLBACKS=5               # Maximum rollbacks before stopping
-CONVERGENCE_PATIENCE=10       # Iterations without improvement before convergence
+CONVERGENCE_PATIENCE=10       # Iterations without improvement of >= ACCURACY_TOLERANCE before convergence
 
 # Rollback thresholds
 ACCURACY_TOLERANCE=0.5        # Allowed accuracy drop (0.5%)
@@ -346,6 +346,28 @@ SEVERE_DROP_THRESHOLD=2.0     # Immediate rollback threshold (2%)
 EPOCHS=10                     # Epochs per training iteration
 NUM_CLIENTS=2                 # Number of client instances
 ```
+
+## Simulating an Unreliable Client
+
+To test rollback and client exclusion, you can run an **unreliable client** that submits bad weight updates:
+
+1. **Enable it:** set in `.env`:
+   ```bash
+   ADD_UNRELIABLE_CLIENT=true
+   ```
+2. **Start with the unreliable client:** `make up` (or `docker compose --profile unreliable up -d`).  
+   The Makefile reads `.env` and adds the `unreliable` profile when `ADD_UNRELIABLE_CLIENT` is true.
+
+**Behavior:**
+
+- The unreliable client runs as a separate container (`blockchain-fl-unreliable-client`) and uses a fixed client ID: `unreliable`.
+- **Iteration 1:** it submits **zero** weight diffs, so the first round is unaffected.
+- **From iteration 2:** it submits **random** weight diffs (same model shape as the real clients), which typically hurt accuracy and trigger rollback logic.
+- It consumes TRAIN tasks from the same `train_queue` (fanout) as normal clients and publishes updates to `client_updates`. It ignores ROLLBACK tasks.
+
+**Rollback and exclusion:**
+
+- The main service detects accuracy drops and may trigger a rollback. When diagnosing which clients contributed to the regression, it can identify and **exclude** the unreliable client from the next round (individual-diff diagnosis). No extra configuration is needed for exclusion.
 
 ## Benchmarking and Metrics Collection
 

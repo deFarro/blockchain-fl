@@ -46,8 +46,8 @@ API_KEY=your-secret-api-key-here  # API key for main service authentication
 TARGET_ACCURACY=95.0          # Target accuracy to achieve
 MAX_ITERATIONS=100            # Maximum training iterations
 MAX_ROLLBACKS=5               # Maximum rollbacks before stopping
-CONVERGENCE_PATIENCE=10       # Iterations without improvement before convergence
-ACCURACY_TOLERANCE=0.5        # Allowed accuracy drop (0.5%)
+CONVERGENCE_PATIENCE=10       # Iterations without improvement of >= ACCURACY_TOLERANCE before convergence
+ACCURACY_TOLERANCE=0.5        # For rollback: allowed drop; for convergence: min improvement to count as "improved"
 PATIENCE_THRESHOLD=3          # Consecutive bad iterations before rollback
 SEVERE_DROP_THRESHOLD=2.0     # Immediate rollback threshold (2%)
 
@@ -59,3 +59,5 @@ NUM_CLIENTS=2                 # Number of client instances
 EPOCHS=10                     # Epochs per training iteration
 SPLIT_TYPE=iid                # Dataset split type (iid or non_iid)
 DATASET_SEED=42               # Seed for dataset splitting
+
+ADD_UNRELIABLE_CLIENT=false   # If true, "make up" starts unreliable client (profile unreliable)
