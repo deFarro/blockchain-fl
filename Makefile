@@ -2,7 +2,7 @@
 
 help:
 	@echo "Available commands:"
-	@echo "  make build           - Build Docker images"
+	@echo "  make build           - Build Docker images (datasets once, then main + client)"
 	@echo "  make up              - Start all services"
 	@echo "  make down            - Stop all services"
 	@echo "  make logs            - View logs from all services"
@@ -20,7 +20,10 @@ help:
 	@echo "  make test-docker     - Run tests in Docker containers"
 
 build:
-	docker-compose build
+	@echo "Building datasets image (downloads dataset once from DATASET_NAME in .env)..."
+	@docker-compose build datasets
+	@echo "Building main-service and client-service (copy dataset from datasets image)..."
+	@docker-compose build main-service client-service
 
 up:
 	@if [ -f .env ]; then \

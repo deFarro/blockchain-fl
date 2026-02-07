@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     )
     excluded_clients: List[str] = []  # List of client IDs to exclude from aggregation
 
+    # Dataset Configuration
+    dataset_name: str = "mnist"  # Dataset to use: mnist, caltech101
+
     # Training Configuration
     target_accuracy: float = 95.0  # Target accuracy to achieve (percentage)
     max_iterations: int = 100  # Maximum training iterations
@@ -80,7 +83,7 @@ class Settings(BaseSettings):
 
     @property
     def data_dir(self) -> Path:
-        """Get data directory."""
+        """Get base data directory (dataset-specific path is data_dir / dataset_name)."""
         return self.project_root / "data"
 
     @property

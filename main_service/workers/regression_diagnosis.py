@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from shared.logger import setup_logger
 from shared.models.model import SimpleCNN
+from shared.datasets import get_dataset
 from shared.config import settings
 
 logger = setup_logger(__name__)
@@ -21,7 +22,14 @@ class RegressionDiagnosis:
         Args:
             model: Model instance (creates new one if None)
         """
-        self.model = model or SimpleCNN(num_classes=10)
+        if model is not None:
+            self.model = model
+        else:
+            dataset = get_dataset()
+            self.model = SimpleCNN(
+                num_classes=dataset.get_num_classes(),
+                in_channels=dataset.get_in_channels(),
+            )
 
     def test_single_client_diff(
         self,

@@ -31,7 +31,7 @@ class ClientConfig(BaseSettings):
     environment: str = "development"
 
     # Dataset Configuration
-    data_dir: str = "data/mnist"
+    dataset_name: str = "mnist"  # Dataset to use: mnist, caltech101
 
     # Training Configuration
     epochs: int = 1  # Number of epochs per training iteration
@@ -39,6 +39,11 @@ class ClientConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
+
+    @property
+    def data_dir(self) -> str:
+        """Dataset directory, derived from dataset_name (e.g. data/mnist, data/caltech101)."""
+        return f"data/{self.dataset_name}"
 
     @property
     def rabbitmq_url(self) -> str:

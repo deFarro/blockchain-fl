@@ -1,0 +1,18 @@
+# Single image that downloads the dataset once. Main and client services
+# COPY --from=blockchain-fl-datasets:latest /app/data /app/data at build time.
+# Build with: docker-compose build datasets (or make build, which does this first).
+
+ARG DATASET_NAME=mnist
+FROM python:3.12-slim AS downloader
+ARG DATASET_NAME=mnist
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY main_service/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY scripts/download_datasets.py scripts/
+RUN python scripts/download_datasets.py ${DATASET_NAME}
+
+# Minimal image that only contains /app/data (used as COPY --from= source)
+FROM alpine:3.19
+COPY --from=downloader /app/data /app/data

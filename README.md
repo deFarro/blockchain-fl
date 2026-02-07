@@ -666,7 +666,7 @@ Encrypted diff format includes: encrypted_diff (AES-256 encrypted weight diff by
 **Hyperledger Fabric Chaincode:**
 
 - Chaincode (smart contract) is also written in Go
-- Location: `main_service/blockchain/chaincode/model_provenance.go`
+- Location: `blockchain_service/chaincode/model_provenance.go`
 - Defines data structures and smart contract functions
 - Runs in a secure Docker container managed by Fabric
 
@@ -1323,8 +1323,7 @@ For TRAINING_COMPLETE tasks, the payload includes final_model_info containing: f
 - main_service/ (Python)
   - workers/ (aggregation_worker.py, storage_worker.py, validation_worker.py, rollback_worker.py)
   - api/ (server.py, routes.py)
-  - blockchain/ (fabric_client.py - HTTP client for blockchain-service, chaincode/model_provenance.go)
-  - storage/ (ipfs_client.py, encryption.py)
+  - blockchain/ (fabric_client.py - HTTP client for blockchain-service)
   - requirements.txt
   - Dockerfile
 - blockchain_service/ (Go)
@@ -1341,9 +1340,10 @@ For TRAINING_COMPLETE tasks, the payload includes final_model_info containing: f
 - shared/ (Python)
   - models/ (task.py)
   - utils/ (crypto.py, hashing.py)
+  - storage/ (ipfs_client.py, encryption.py)
   - datasets/ (dataset_interface.py, mnist_dataset.py)
-  - config.py
-  - logger.py
+  - config/ (settings.py)
+  - logger/
 - scripts/
   - generate_encryption_key.py
 - data/ (created at runtime)

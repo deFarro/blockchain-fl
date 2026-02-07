@@ -16,6 +16,7 @@ if "RABBITMQ_HOST" not in os.environ:
 import pytest
 import pika
 import torch
+from torch.utils.data import TensorDataset
 from unittest.mock import Mock, AsyncMock, patch
 from shared.queue.publisher import QueuePublisher
 from shared.models.task import Task, TaskType, TrainTaskPayload, TaskMetadata
@@ -23,6 +24,20 @@ from client_service.worker import ClientWorker
 from client_service.config import config
 from client_service.training.model import SimpleCNN
 from client_service.training.trainer import Trainer
+
+GET_DATASET_PATCH = "client_service.training.trainer.get_dataset"
+
+
+def _make_mock_dataset(num_classes=10, in_channels=1, num_samples=64):
+    """Mock dataset so tests don't download real data."""
+    data = torch.rand(num_samples, in_channels, 28, 28)
+    labels = torch.randint(0, num_classes, (num_samples,))
+    fake = TensorDataset(data, labels)
+    mock = Mock()
+    mock.get_num_classes.return_value = num_classes
+    mock.get_in_channels.return_value = in_channels
+    mock.load_training_data.return_value = fake
+    return mock
 
 
 def test_worker_train_task():
@@ -54,29 +69,31 @@ def test_worker_train_task():
     print("Note: Testing worker directly (not publishing to queue)")
     print()
 
-    # Create worker with trainer using 1 epoch for faster testing
-    print("Creating client worker...")
-    trainer = Trainer(epochs=1)  # Use 1 epoch for faster testing
-    worker = ClientWorker(trainer=trainer)
+    # Mock dataset for entire test (Trainer init and train() both call get_dataset)
+    mock_dataset = _make_mock_dataset()
+    with patch(GET_DATASET_PATCH, return_value=mock_dataset):
+        # Create worker with trainer
+        print("Creating client worker...")
+        trainer = Trainer(epochs=1)  # Use 1 epoch for faster testing
+        worker = ClientWorker(trainer=trainer)
 
-    # Mock the publisher to avoid RabbitMQ connection
-    # The worker will try to publish client updates, but we don't need RabbitMQ for this test
-    mock_publisher = Mock()
-    mock_publisher.publish_dict = Mock(return_value=None)
-    worker.publisher = mock_publisher
+        # Mock the publisher to avoid RabbitMQ connection
+        mock_publisher = Mock()
+        mock_publisher.publish_dict = Mock(return_value=None)
+        worker.publisher = mock_publisher
 
-    # Mock IPFS client to avoid connection errors
-    mock_cid = "QmTestWeightDiff123"
-    with patch("shared.storage.ipfs_client.IPFSClient") as mock_ipfs_class:
-        mock_client = AsyncMock()
-        mock_client.add_bytes = AsyncMock(return_value=mock_cid)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_ipfs_class.return_value = mock_client
+        # Mock IPFS client to avoid connection errors
+        mock_cid = "QmTestWeightDiff123"
+        with patch("shared.storage.ipfs_client.IPFSClient") as mock_ipfs_class:
+            mock_client = AsyncMock()
+            mock_client.add_bytes = AsyncMock(return_value=mock_cid)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_ipfs_class.return_value = mock_client
 
-        # Process task directly (for testing, not using consume loop)
-        print("Processing task...")
-        success = worker._handle_train_task(test_task)
+            # Process task directly (train() calls load_dataset -> get_dataset)
+            print("Processing task...")
+            success = worker._handle_train_task(test_task)
 
     # Verify that publish_dict was called (worker tried to publish the update)
     assert (

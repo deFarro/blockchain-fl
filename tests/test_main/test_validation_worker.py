@@ -16,11 +16,28 @@ if "RABBITMQ_HOST" not in os.environ:
 
 import pytest
 import torch
+from torch.utils.data import TensorDataset
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from main_service.workers.validation_worker import ValidationWorker
 from shared.models.task import Task, TaskType, TaskMetadata, ValidateTaskPayload
 from shared.storage.encryption import EncryptionService
 from shared.utils.crypto import AES256GCM
+
+# Patch target for get_dataset (must patch where it is used)
+GET_DATASET_PATCH = "main_service.workers.validation_worker.get_dataset"
+
+
+def _make_mock_dataset(num_classes=10, in_channels=1, num_samples=64):
+    """Create a mock dataset to avoid downloading real data in tests."""
+    # Fake test set: small tensor dataset (e.g. MNIST-like shape)
+    data = torch.rand(num_samples, in_channels, 28, 28)
+    labels = torch.randint(0, num_classes, (num_samples,))
+    fake_dataset = TensorDataset(data, labels)
+    mock = Mock()
+    mock.get_num_classes.return_value = num_classes
+    mock.get_in_channels.return_value = in_channels
+    mock.load_test_data.return_value = fake_dataset
+    return mock
 
 
 def serialize_diff(diff):
@@ -32,13 +49,14 @@ def serialize_diff(diff):
 
 
 def test_validation_worker_load_test_dataset():
-    """Test loading test dataset."""
+    """Test loading test dataset (uses mock dataset, no download)."""
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        worker = ValidationWorker()
     print("=" * 60)
     print("Testing Validation Worker - Load Test Dataset")
     print("=" * 60)
     print()
 
-    worker = ValidationWorker()
     test_loader = worker._load_test_dataset()
 
     assert test_loader is not None
@@ -56,7 +74,7 @@ def test_validation_worker_load_test_dataset():
 
 
 def test_validation_worker_retrieve_and_decrypt_diff():
-    """Test retrieving and decrypting diff from IPFS."""
+    """Test retrieving and decrypting diff from IPFS (uses mock dataset, no download)."""
     print("\n" + "=" * 60)
     print("Testing Validation Worker - Retrieve and Decrypt Diff")
     print("=" * 60)
@@ -81,8 +99,9 @@ def test_validation_worker_retrieve_and_decrypt_diff():
     encryption_service = EncryptionService(key=key)
     encrypted_diff = encryption_service.encrypt_diff(diff_bytes)
 
-    # Create worker
-    worker = ValidationWorker()
+    # Create worker (mock dataset to avoid download)
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        worker = ValidationWorker()
     worker.encryption_service = encryption_service
 
     # Mock IPFS client
@@ -114,13 +133,14 @@ def test_validation_worker_retrieve_and_decrypt_diff():
 
 
 def test_validation_worker_evaluate_model():
-    """Test model evaluation on test dataset."""
+    """Test model evaluation on test dataset (uses mock dataset, no download)."""
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        worker = ValidationWorker()
     print("\n" + "=" * 60)
     print("Testing Validation Worker - Evaluate Model")
     print("=" * 60)
     print()
 
-    worker = ValidationWorker()
     test_loader = worker._load_test_dataset()
 
     # Evaluate model (should work even with random weights)
@@ -169,8 +189,9 @@ def test_validation_worker_validate_model():
     encryption_service = EncryptionService(key=key)
     encrypted_diff = encryption_service.encrypt_diff(diff_bytes)
 
-    # Create worker
-    worker = ValidationWorker()
+    # Create worker (mock dataset to avoid download)
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        worker = ValidationWorker()
     worker.encryption_service = encryption_service
 
     # Mock IPFS client
@@ -207,13 +228,13 @@ def test_validation_worker_validate_model():
 
 
 def test_validation_worker_publish_decision_task():
-    """Test publishing DECISION task."""
+    """Test publishing DECISION task (uses mock dataset, no download)."""
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        worker = ValidationWorker()
     print("\n" + "=" * 60)
     print("Testing Validation Worker - Publish Decision Task")
     print("=" * 60)
     print()
-
-    worker = ValidationWorker()
 
     # Mock publisher
     mock_publisher = Mock()
@@ -281,8 +302,9 @@ def test_validation_worker_handle_validate_task():
     encryption_service = EncryptionService(key=key)
     encrypted_diff = encryption_service.encrypt_diff(diff_bytes)
 
-    # Create worker
-    worker = ValidationWorker()
+    # Create worker (mock dataset to avoid download)
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        worker = ValidationWorker()
     worker.encryption_service = encryption_service
 
     # Mock publisher
@@ -350,13 +372,13 @@ def test_validation_worker_handle_validate_task():
 
 @pytest.mark.filterwarnings("ignore::RuntimeWarning:unittest.mock")
 def test_validation_worker_error_handling():
-    """Test error handling in validation worker."""
+    """Test error handling in validation worker (uses mock dataset, no download)."""
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        worker = ValidationWorker()
     print("\n" + "=" * 60)
     print("Testing Validation Worker - Error Handling")
     print("=" * 60)
     print()
-
-    worker = ValidationWorker()
 
     # Mock publisher
     mock_publisher = Mock()

@@ -3,6 +3,7 @@
 import json
 from typing import Dict, Any
 from shared.models.model import SimpleCNN
+from shared.datasets import get_dataset
 from shared.storage.encryption import EncryptionService
 from shared.storage.ipfs_client import IPFSClient
 from shared.logger import setup_logger
@@ -26,8 +27,11 @@ async def prepopulate_initial_weights() -> str:
     """
     logger.info("Prepopulating initial model weights...")
 
-    # Create model with random weights
-    model = SimpleCNN(num_classes=10)
+    dataset = get_dataset()
+    model = SimpleCNN(
+        num_classes=dataset.get_num_classes(),
+        in_channels=dataset.get_in_channels(),
+    )
     weights = model.get_weights()
 
     # Serialize weights to JSON string

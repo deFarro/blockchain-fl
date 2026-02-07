@@ -150,3 +150,7 @@ class MNISTDataset(DatasetInterface):
     def get_class_names(self) -> list:
         """Get class names (digits 0-9)."""
         return [str(i) for i in range(10)]
+
+    def get_in_channels(self) -> int:
+        """Get number of input channels (1 for grayscale MNIST)."""
+        return 1

@@ -63,3 +63,13 @@ class DatasetInterface(ABC):
             List of class names
         """
         pass
+
+    @abstractmethod
+    def get_in_channels(self) -> int:
+        """
+        Get the number of input channels (1 for grayscale, 3 for RGB).
+
+        Returns:
+            Number of input channels for the model
+        """
+        pass

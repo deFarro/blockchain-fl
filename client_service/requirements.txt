@@ -9,6 +9,8 @@ pydantic-settings==2.7.1
 torch==2.9.1
 torchvision==0.24.1
 numpy==1.26.4
+scipy>=1.11.0  # Caltech101 .mat loading
+gdown>=5.0.0   # Caltech101 download (torchvision)
 
 # Federated Learning
 syft==0.9.5

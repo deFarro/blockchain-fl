@@ -9,6 +9,8 @@ sys.path.insert(0, str(project_root))
 
 import os
 import torch
+from torch.utils.data import TensorDataset
+from unittest.mock import Mock, patch
 from client_service.training.model import SimpleCNN, create_model
 from client_service.training.trainer import Trainer
 from client_service.config import config
@@ -16,6 +18,21 @@ from client_service.config import config
 # Set localhost for local testing
 if "RABBITMQ_HOST" not in os.environ:
     os.environ["RABBITMQ_HOST"] = "localhost"
+
+# Patch get_dataset so tests don't download real data
+GET_DATASET_PATCH = "client_service.training.trainer.get_dataset"
+
+
+def _make_mock_dataset(num_classes=10, in_channels=1, num_samples=64):
+    """Mock dataset for trainer tests (no download)."""
+    data = torch.rand(num_samples, in_channels, 28, 28)
+    labels = torch.randint(0, num_classes, (num_samples,))
+    fake = TensorDataset(data, labels)
+    mock = Mock()
+    mock.get_num_classes.return_value = num_classes
+    mock.get_in_channels.return_value = in_channels
+    mock.load_training_data.return_value = fake
+    return mock
 
 
 def test_model_creation():
@@ -53,14 +70,16 @@ def test_model_creation():
 
 
 def test_trainer_basic():
-    """Test basic trainer functionality."""
+    """Test basic trainer functionality (uses mock dataset, no download)."""
     print("\nTesting trainer...")
 
-    trainer = Trainer(learning_rate=0.001, batch_size=32, epochs=1)
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        trainer = Trainer(learning_rate=0.001, batch_size=32, epochs=1)
     print("✓ Trainer created")
 
-    # Test dataset loading
-    train_loader, train_dataset = trainer.load_dataset(instance_id="test_client_0")
+    # Test dataset loading (mock dataset)
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        train_loader, train_dataset = trainer.load_dataset(instance_id="test_client_0")
     assert len(train_dataset) > 0, "Dataset should not be empty"
     print(f"✓ Dataset loaded: {len(train_dataset)} samples")
 
@@ -75,11 +94,12 @@ def test_trainer_basic():
 
 
 def test_weight_diff():
-    """Test weight diff computation during training."""
+    """Test weight diff computation during training (uses mock dataset, no download)."""
     print("\nTesting weight diff computation...")
 
-    trainer = Trainer(learning_rate=0.001, batch_size=32, epochs=1)
-    train_loader, _ = trainer.load_dataset(instance_id="test_client_0")
+    with patch(GET_DATASET_PATCH, return_value=_make_mock_dataset()):
+        trainer = Trainer(learning_rate=0.001, batch_size=32, epochs=1)
+        train_loader, _ = trainer.load_dataset(instance_id="test_client_0")
 
     # Get initial weights
     initial_weights = trainer.get_model().get_weights()

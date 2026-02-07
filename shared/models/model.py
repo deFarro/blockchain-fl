@@ -1,4 +1,4 @@
-"""PyTorch model definition for MNIST classification."""
+"""PyTorch model definition for image classification (MNIST, Caltech101, etc.)."""
 
 import torch
 import torch.nn as nn
@@ -6,40 +6,40 @@ import torch.nn.functional as F
 from typing import Dict, Any, Optional
 import json
 
+# Spatial size after two conv+pool layers when using AdaptiveAvgPool2d(7)
+FC_INPUT_SIZE = 64 * 7 * 7
+
 
 class SimpleCNN(nn.Module):
     """
-    Simple Convolutional Neural Network for MNIST classification.
+    Simple Convolutional Neural Network for image classification.
+
+    Supports grayscale (e.g. MNIST) and RGB (e.g. Caltech101) via in_channels.
+    Uses AdaptiveAvgPool2d so any input spatial size works.
 
     Architecture:
-    - Conv2d(1, 32, kernel_size=3) -> ReLU -> MaxPool2d(2)
-    - Conv2d(32, 64, kernel_size=3) -> ReLU -> MaxPool2d(2)
-    - Flatten
-    - Linear(9216, 128) -> ReLU -> Dropout(0.5)
-    - Linear(128, 10) -> LogSoftmax
+    - Conv2d(in_channels, 32, 3) -> ReLU -> MaxPool2d(2)
+    - Conv2d(32, 64, 3) -> ReLU -> MaxPool2d(2) -> AdaptiveAvgPool2d(7)
+    - Flatten -> Linear(64*7*7, 128) -> ReLU -> Dropout(0.5) -> Linear(128, num_classes)
     """
 
-    def __init__(self, num_classes: int = 10):
+    def __init__(self, num_classes: int = 10, in_channels: int = 1):
         """
         Initialize the CNN model.
 
         Args:
-            num_classes: Number of output classes (default: 10 for MNIST)
+            num_classes: Number of output classes (e.g. 10 for MNIST, 101 for Caltech101).
+            in_channels: Input channels (1 for grayscale, 3 for RGB). Default 1 (MNIST).
         """
         super(SimpleCNN, self).__init__()
         self.num_classes = num_classes
+        self.in_channels = in_channels
 
-        # Convolutional layers
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-
-        # Pooling
         self.pool = nn.MaxPool2d(2, 2)
-
-        # Fully connected layers
-        # After two conv+pool layers: 28x28 -> 14x14 -> 7x7
-        # 7 * 7 * 64 = 3136, but we'll use adaptive pooling to be safe
-        self.fc1 = nn.Linear(64 * 7 * 7, 128)
+        self.adaptive_pool = nn.AdaptiveAvgPool2d(7)
+        self.fc1 = nn.Linear(FC_INPUT_SIZE, 128)
         self.fc2 = nn.Linear(128, num_classes)
         self.dropout = nn.Dropout(0.5)
 
@@ -48,25 +48,18 @@ class SimpleCNN(nn.Module):
         Forward pass.
 
         Args:
-            x: Input tensor of shape (batch_size, 1, 28, 28)
+            x: Input tensor (batch_size, in_channels, H, W), e.g. (B, 1, 28, 28) or (B, 3, 128, 128).
 
         Returns:
             Output tensor of shape (batch_size, num_classes)
         """
-        # First conv block
-        x = self.pool(F.relu(self.conv1(x)))  # 28x28 -> 14x14
-
-        # Second conv block
-        x = self.pool(F.relu(self.conv2(x)))  # 14x14 -> 7x7
-
-        # Flatten
-        x = x.view(-1, 64 * 7 * 7)
-
-        # Fully connected layers
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = self.adaptive_pool(x)
+        x = x.view(-1, FC_INPUT_SIZE)
         x = F.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.fc2(x)
-
         return F.log_softmax(x, dim=1)
 
     def get_weights(self) -> Dict[str, Any]:
@@ -224,15 +217,18 @@ class SimpleCNN(nn.Module):
         return weights
 
 
-def create_model(num_classes: int = 10) -> SimpleCNN:
+def create_model(
+    num_classes: int = 10, in_channels: int = 1
+) -> SimpleCNN:
     """
     Create a new model instance.
 
     Args:
-        num_classes: Number of output classes
+        num_classes: Number of output classes.
+        in_channels: Input channels (1 for grayscale, 3 for RGB).
 
     Returns:
         Initialized model
     """
-    return SimpleCNN(num_classes=num_classes)
+    return SimpleCNN(num_classes=num_classes, in_channels=in_channels)
 

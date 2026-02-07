@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from typing import Optional, Dict, Any, Tuple, cast
-from client_service.training.model import SimpleCNN
+from shared.models.model import SimpleCNN
 from client_service.config import config
 from shared.datasets import get_dataset
 from shared.logger import setup_logger
@@ -45,9 +45,17 @@ class Trainer:
         else:
             self.device = device
 
-        # Initialize model
+        # Initialize model (num_classes and in_channels from dataset config)
         if model is None:
-            self.model = SimpleCNN(num_classes=10).to(self.device)
+            dataset_loader = get_dataset(
+                dataset_name=getattr(config, "dataset_name", None),
+                data_dir=str(config.data_dir),
+                seed=config.dataset_seed,
+            )
+            self.model = SimpleCNN(
+                num_classes=dataset_loader.get_num_classes(),
+                in_channels=dataset_loader.get_in_channels(),
+            ).to(self.device)
         else:
             self.model = model.to(self.device)
 

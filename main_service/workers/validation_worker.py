@@ -44,7 +44,10 @@ class ValidationWorker:
         self.publisher = QueuePublisher(connection=self.connection)
         self.encryption_service = EncryptionService()
         self.dataset: DatasetInterface = get_dataset()
-        self.model = SimpleCNN(num_classes=self.dataset.get_num_classes())
+        self.model = SimpleCNN(
+            num_classes=self.dataset.get_num_classes(),
+            in_channels=self.dataset.get_in_channels(),
+        )
         self.test_loader: Optional[DataLoader] = None
         self.running = False
 

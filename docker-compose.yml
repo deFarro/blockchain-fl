@@ -41,6 +41,15 @@ services:
     networks:
       - blockchain-fl-network
 
+  # Dataset is downloaded once here; main-service and client-service COPY from this image at build time.
+  datasets:
+    image: blockchain-fl-datasets:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.datasets
+      args:
+        DATASET_NAME: ${DATASET_NAME:-mnist}
+
   blockchain-service:
     build:
       context: .
@@ -81,6 +90,8 @@ services:
       - API_KEY=${API_KEY:-}  # API key for authentication
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ENVIRONMENT=${ENVIRONMENT:-development}
+      # Dataset Configuration
+      - DATASET_NAME=${DATASET_NAME:-mnist}
       # Training Configuration
       - TARGET_ACCURACY=${TARGET_ACCURACY:-95.0}
       - MAX_ITERATIONS=${MAX_ITERATIONS:-100}
@@ -118,6 +129,7 @@ services:
       - IPFS_HOST=ipfs
       - IPFS_PORT=5001
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}  # Base64-encoded 32-byte key (required for decrypting weights)
+      - DATASET_NAME=${DATASET_NAME:-mnist}  # Dataset: mnist, caltech101 (data path: data/<name>)
       - NUM_CLIENTS=${NUM_CLIENTS:-2}  # Total number of client replicas
       - SPLIT_TYPE=${SPLIT_TYPE:-iid}  # iid or non_iid
       - DATASET_SEED=${DATASET_SEED:-42}  # Seed for dataset splitting
