@@ -156,16 +156,30 @@ class StorageWorker:
                 asyncio.set_event_loop(loop)
 
             async def download_and_store():
-                # Download from IPFS
+                # Download from IPFS (with latency metrics)
+                download_start = time.time()
                 async with IPFSClient() as ipfs_client:
                     aggregated_diff_bytes = await ipfs_client.get_bytes(
                         aggregated_diff_cid
                     )
-                    aggregated_diff_str = aggregated_diff_bytes.decode("utf-8")
-                    logger.info(
-                        f"Downloaded aggregated diff from IPFS: CID={aggregated_diff_cid}, "
-                        f"size={len(aggregated_diff_str.encode('utf-8'))} bytes"
-                    )
+                download_duration = time.time() - download_start
+                metrics_collector = get_metrics_collector()
+                metrics_collector.record_timing(
+                    "ipfs_download",
+                    download_duration,
+                    metadata={
+                        "model_version_id": model_version_id,
+                        "cid": aggregated_diff_cid,
+                        "size_bytes": len(aggregated_diff_bytes),
+                    },
+                )
+                metrics_collector.collect_system_sample()
+                aggregated_diff_str = aggregated_diff_bytes.decode("utf-8")
+                logger.info(
+                    f"Downloaded aggregated diff from IPFS: CID={aggregated_diff_cid}, "
+                    f"size={len(aggregated_diff_str.encode('utf-8'))} bytes "
+                    f"(duration: {download_duration:.3f}s)"
+                )
 
                 # Encrypt and store
                 return await self._encrypt_and_store(

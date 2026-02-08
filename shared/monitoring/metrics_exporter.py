@@ -159,9 +159,58 @@ class MetricsExporter:
                         {"model_version_id": "", "accuracy": 0.0, "loss": 0.0}
                     ],
                 },
+                "blockchain_get_provenance": {
+                    "timings": [0.0],
+                    "metadata": [{"iteration": 0, "model_version_id": ""}],
+                },
+                "blockchain_get_most_recent_rollback": {
+                    "timings": [0.0],
+                    "metadata": [{"iteration": 0, "found": False}],
+                },
+                "blockchain_list_models": {"timings": [0.0], "metadata": [{"iteration": 0, "total": 0}]},
+                "blockchain_record_validation": {
+                    "timings": [0.0],
+                    "metadata": [
+                        {
+                            "iteration": 0,
+                            "model_version_id": "",
+                            "transaction_id": "",
+                        }
+                    ],
+                },
+                "blockchain_rollback": {
+                    "timings": [0.0],
+                    "metadata": [
+                        {
+                            "iteration": 0,
+                            "target_version_id": "",
+                            "transaction_id": "",
+                        }
+                    ],
+                },
+                "ipfs_download": {
+                    "timings": [0.0],
+                    "metadata": [
+                        {
+                            "iteration": 0,
+                            "cid": "",
+                            "model_version_id": "",
+                            "size_bytes": 0,
+                        }
+                    ],
+                },
             },
             "iteration_system_samples": {},
             "iteration_system_metrics": {},
+            "blockchain_service_system_metrics": {
+                "timestamp": "",
+                "memory": {
+                    "alloc_bytes": 0,
+                    "total_alloc_bytes": 0,
+                    "sys_bytes": 0,
+                    "num_gc": 0,
+                },
+            },
         }
         dummy_rows = self._flatten_metrics(dummy_metrics)
 
@@ -247,6 +296,14 @@ class MetricsExporter:
             f"All iteration samples: {dict(metrics_collector.iteration_system_samples)}"
         )
 
+        # Use only the first contiguous block of samples for this iteration.
+        # After a rollback, the same iteration number can be reused and many more
+        # system samples get attributed to it, which would make the summary span
+        # the whole run (huge cpu/memory). We only want the first occurrence.
+        iteration_sample_indices = self._first_contiguous_sample_block(
+            sorted(iteration_sample_indices)
+        )
+
         # Calculate per-iteration system metrics summary
         iteration_system_summary = None
         if iteration_sample_indices:
@@ -305,26 +362,21 @@ class MetricsExporter:
         detailed_timings = metrics_data.get("detailed_timings", {})
         scenario_info = metrics_data.get("scenario_info", {})
 
-        # Find timing indices that belong to this iteration (any operation with iteration in metadata)
-        timing_indices_for_iteration: List[int] = []
-        for operation, timing_data in detailed_timings.items():
-            metadata_list = timing_data.get("metadata", [])
-            for idx, metadata in enumerate(metadata_list):
-                if metadata.get("iteration") == iteration:
-                    if idx not in timing_indices_for_iteration:
-                        timing_indices_for_iteration.append(idx)
-        timing_indices_for_iteration.sort()
-
-        if not timing_indices_for_iteration:
-            logger.debug(f"No timing indices found for iteration {iteration}")
+        # One row per FL iteration: use a single canonical timing index per iteration.
+        # Prefer the index where model_validation (or fedavg, blockchain_register) has this
+        # iteration — i.e. the main completion of the iteration, not rollback-related ops.
+        canonical_idx = self._canonical_timing_index_for_iteration(
+            detailed_timings, iteration
+        )
+        if canonical_idx is None:
+            logger.debug(f"No timing index found for iteration {iteration}")
             return
 
-        # Build base row (scenario only; no op_*; each row has per-iteration timing_* only)
+        # Build exactly one row for this iteration
         base_row: Dict[str, Any] = {}
         for key, value in scenario_info.items():
             base_row[f"scenario_{key}"] = self._format_value(value)
 
-        iteration_rows = []
         system_summary_for_row = iteration_system_summary
         if system_summary_for_row is None:
             system_summary_for_row = {
@@ -339,28 +391,32 @@ class MetricsExporter:
                 "network": {"total_bytes_sent": 0, "total_bytes_recv": 0},
                 "disk": {"total_bytes_read": 0, "total_bytes_written": 0},
             }
-        for i in timing_indices_for_iteration:
-            row = dict(base_row)
-            row["timing_sample_index"] = self._format_value(i)
-            # Always use per-iteration system summary for this row
-            for key, value in system_summary_for_row.items():
-                if isinstance(value, dict):
-                    for sub_key, sub_value in value.items():
-                        row[f"system_{key}_{sub_key}"] = self._format_value(sub_value)
-                else:
-                    row[f"system_{key}"] = self._format_value(value)
-            # Add timing data for this index
-            for operation, timing_data in detailed_timings.items():
-                timings = timing_data.get("timings", [])
-                metadata_list = timing_data.get("metadata", [])
-                if i < len(timings):
-                    row[f"timing_{operation}_duration"] = self._format_value(timings[i])
-                if i < len(metadata_list):
-                    for meta_key, meta_value in metadata_list[i].items():
-                        row[f"timing_{operation}_{meta_key}"] = self._format_value(
-                            meta_value
-                        )
-            iteration_rows.append(row)
+
+        i = canonical_idx
+        row = dict(base_row)
+        row["timing_sample_index"] = self._format_value(i)
+        for key, value in system_summary_for_row.items():
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    row[f"system_{key}_{sub_key}"] = self._format_value(sub_value)
+            else:
+                row[f"system_{key}"] = self._format_value(value)
+        for operation, timing_data in detailed_timings.items():
+            timings = timing_data.get("timings", [])
+            metadata_list = timing_data.get("metadata", [])
+            if i < len(timings):
+                row[f"timing_{operation}_duration"] = self._format_value(timings[i])
+            if i < len(metadata_list):
+                for meta_key, meta_value in metadata_list[i].items():
+                    row[f"timing_{operation}_{meta_key}"] = self._format_value(
+                        meta_value
+                    )
+        # Per-iteration total time per operation (e.g. total get_provenance time this iteration)
+        for op, total_sec in self._operation_total_durations_for_iteration(
+            detailed_timings, iteration
+        ).items():
+            row[f"timing_{op}_total_duration"] = self._format_value(total_sec)
+        iteration_rows = [row]
 
         # Append rows to CSV
         assert _active_fieldnames is not None, "Cannot append: no active CSV session"
@@ -372,9 +428,92 @@ class MetricsExporter:
                 writer.writerow(complete_row)
 
         logger.info(
-            f"Appended {len(iteration_rows)} row(s) for iteration {iteration} "
-            f"to {_active_csv_path}"
+            f"Appended 1 row for iteration {iteration} to {_active_csv_path}"
         )
+
+    @staticmethod
+    def _operation_total_durations_for_iteration(
+        detailed_timings: Dict[str, Any], iteration: int
+    ) -> Dict[str, float]:
+        """
+        For each operation, sum duration over all timing indices that belong to
+        this iteration (any op has metadata.iteration == iteration at that index).
+        So "total time spent on get_provenance this iteration" includes all
+        get_provenance calls at those indices, even if get_provenance has no
+        iteration in metadata.
+        """
+        # Set of timing indices where at least one operation has this iteration
+        indices_for_iteration: set[int] = set()
+        for timing_data in detailed_timings.values():
+            for idx, metadata in enumerate(timing_data.get("metadata", [])):
+                if metadata.get("iteration") == iteration:
+                    indices_for_iteration.add(idx)
+
+        totals: Dict[str, float] = {}
+        for operation, timing_data in detailed_timings.items():
+            timings = timing_data.get("timings", [])
+            total = 0.0
+            for i in indices_for_iteration:
+                if i < len(timings):
+                    total += timings[i]
+            totals[operation] = total
+        return totals
+
+    @staticmethod
+    def _canonical_timing_index_for_iteration(
+        detailed_timings: Dict[str, Any], iteration: int
+    ) -> Optional[int]:
+        """
+        Return a single timing index that represents this FL iteration, so we write
+        one row per iteration. Use position-based index first (iteration N -> index N-1)
+        so we get 0, 1, 2, ... and avoid duplicates if metadata.iteration is updated
+        in place; then fall back to metadata-based search for rollback/out-of-order.
+        """
+        # Prefer index = iteration - 1 for model_validation (1-based iteration -> 0-based index)
+        # so we get a unique index per iteration even if metadata is overwritten later
+        mv = detailed_timings.get("model_validation")
+        if mv:
+            timings = mv.get("timings", [])
+            idx = int(iteration) - 1
+            if 0 <= idx < len(timings):
+                return idx
+        # Fallback: first index where an op has this iteration in metadata
+        preferred_ops = (
+            "model_validation",
+            "fedavg_aggregation",
+            "blockchain_register",
+        )
+        for op in preferred_ops:
+            timing_data = detailed_timings.get(op)
+            if not timing_data:
+                continue
+            metadata_list = timing_data.get("metadata", [])
+            for idx, metadata in enumerate(metadata_list):
+                if metadata.get("iteration") == iteration:
+                    return idx
+        for operation, timing_data in detailed_timings.items():
+            metadata_list = timing_data.get("metadata", [])
+            for idx, metadata in enumerate(metadata_list):
+                if metadata.get("iteration") == iteration:
+                    return idx
+        return None
+
+    @staticmethod
+    def _first_contiguous_sample_block(sorted_indices: List[int]) -> List[int]:
+        """
+        Return the first contiguous block of sample indices.
+        After rollback, an iteration can have many non-contiguous indices (e.g. [2,3,50..120]).
+        Using the full range would produce a global-like summary; we use only the first run.
+        """
+        if not sorted_indices:
+            return []
+        block = [sorted_indices[0]]
+        for i in range(1, len(sorted_indices)):
+            if sorted_indices[i] == block[-1] + 1:
+                block.append(sorted_indices[i])
+            else:
+                break
+        return block
 
     def _delete_previous_csv_files(self, current_csv_path: Path) -> None:
         """
@@ -424,73 +563,50 @@ class MetricsExporter:
         for key, value in scenario_info.items():
             base_row[f"scenario_{key}"] = self._format_value(value)
 
-        # Create rows for detailed timings
-        if detailed_timings:
-            # Find maximum number of timings across all operations
-            max_timings = 0
-            for operation, timing_data in detailed_timings.items():
-                timings = timing_data.get("timings", [])
-                max_timings = max(max_timings, len(timings))
+        # Add blockchain-service process metrics (snapshot at export time; one per run)
+        bc_sys = metrics_data.get("blockchain_service_system_metrics", {})
+        for key, value in self._flatten_dict_with_prefix(bc_sys, "blockchain_service_").items():
+            base_row[key] = self._format_value(value)
 
-            # Create one row per timing sample
-            for i in range(max_timings):
+        # Create one row per FL iteration (same as incremental append)
+        if detailed_timings:
+            iteration_system_metrics = metrics_data.get(
+                "iteration_system_metrics", {}
+            )
+            # Collect iterations that have a canonical timing index
+            iterations_seen: set[int] = set()
+            for op in ("model_validation", "fedavg_aggregation", "blockchain_register"):
+                timing_data = detailed_timings.get(op)
+                if not timing_data:
+                    continue
+                for metadata in timing_data.get("metadata", []):
+                    iter_val = metadata.get("iteration")
+                    if isinstance(iter_val, (int, float)):
+                        iterations_seen.add(int(iter_val))
+            for op, timing_data in detailed_timings.items():
+                for metadata in timing_data.get("metadata", []):
+                    iter_val = metadata.get("iteration")
+                    if isinstance(iter_val, (int, float)):
+                        iterations_seen.add(int(iter_val))
+
+            for iteration in sorted(iterations_seen):
+                i = self._canonical_timing_index_for_iteration(
+                    detailed_timings, iteration
+                )
+                if i is None:
+                    continue
                 row = base_row.copy()
                 row["timing_sample_index"] = self._format_value(i)
 
-                # Determine iteration for this row from metadata
-                iteration = None
-                for operation, timing_data in detailed_timings.items():
-                    metadata_list = timing_data.get("metadata", [])
-                    if i < len(metadata_list):
-                        metadata = metadata_list[i]
-                        if "iteration" in metadata:
-                            iter_val = metadata["iteration"]
-                            if isinstance(iter_val, (int, float)):
-                                iteration = int(iter_val)
-                                break
-
-                # Add system metrics for this iteration (or global if no iteration found)
-                iteration_system_metrics = metrics_data.get(
-                    "iteration_system_metrics", {}
-                )
-                iteration_system_samples = metrics_data.get(
-                    "iteration_system_samples", {}
-                )
-                iteration_key = int(iteration) if iteration is not None else None
-                per_iter_summary = None
-                if iteration_key is not None:
-                    per_iter_summary = iteration_system_metrics.get(
-                        iteration_key
-                    ) or iteration_system_metrics.get(str(iteration_key))
-
-                has_samples_for_iteration = iteration_key is not None and (
-                    iteration_key in iteration_system_samples
-                    or str(iteration_key) in iteration_system_samples
-                )
-
+                iteration_key = int(iteration)
+                per_iter_summary = iteration_system_metrics.get(
+                    iteration_key
+                ) or iteration_system_metrics.get(str(iteration_key))
                 if per_iter_summary is not None and isinstance(per_iter_summary, dict):
-                    # Use per-iteration summary when available (actual values for this iteration)
                     system_summary = per_iter_summary
-                    logger.debug(
-                        f"Using per-iteration system metrics for iteration {iteration}"
-                    )
-                elif has_samples_for_iteration:
-                    # Iteration has samples but no precomputed summary: use global so we show real values
-                    logger.debug(
-                        f"Per-iteration summary missing for iteration {iteration}, "
-                        "using global system summary"
-                    )
-                    system_summary = system_metrics
                 else:
-                    # No iteration or no per-iteration data: use global system metrics summary
-                    if iteration is not None:
-                        logger.debug(
-                            f"No system samples for iteration {iteration}, "
-                            "using global summary"
-                        )
                     system_summary = system_metrics
 
-                # Add system metrics to row
                 for key, value in system_summary.items():
                     if isinstance(value, dict):
                         for sub_key, sub_value in value.items():
@@ -505,15 +621,21 @@ class MetricsExporter:
                     metadata_list = timing_data.get("metadata", [])
 
                     if i < len(timings):
-                        row[f"timing_{operation}_duration"] = timings[i]
+                        row[f"timing_{operation}_duration"] = self._format_value(
+                            timings[i]
+                        )
+                    if i < len(metadata_list):
+                        for meta_key, meta_value in metadata_list[i].items():
+                            row[f"timing_{operation}_{meta_key}"] = (
+                                self._format_value(meta_value)
+                            )
 
-                        # Add metadata if available
-                        if i < len(metadata_list):
-                            metadata = metadata_list[i]
-                            for meta_key, meta_value in metadata.items():
-                                row[f"timing_{operation}_{meta_key}"] = (
-                                    self._format_value(meta_value)
-                                )
+                for op, total_sec in self._operation_total_durations_for_iteration(
+                    detailed_timings, iteration
+                ).items():
+                    row[f"timing_{op}_total_duration"] = self._format_value(
+                        total_sec
+                    )
 
                 rows.append(row)
         else:
@@ -529,6 +651,21 @@ class MetricsExporter:
             rows.append(row)
 
         return rows
+
+    def _flatten_dict_with_prefix(
+        self, d: Dict[str, Any], prefix: str
+    ) -> Dict[str, Any]:
+        """Flatten nested dict to top-level keys with prefix (e.g. memory.alloc_bytes -> prefix_memory_alloc_bytes)."""
+        out: Dict[str, Any] = {}
+        for key, value in d.items():
+            if isinstance(value, dict) and not isinstance(value, list):
+                for sub_key, sub_value in self._flatten_dict_with_prefix(
+                    value, f"{prefix}{key}_"
+                ).items():
+                    out[sub_key] = sub_value
+            else:
+                out[f"{prefix}{key}"] = value
+        return out
 
     def _format_value(self, value: Any) -> str:
         """
@@ -603,6 +740,9 @@ class MetricsExporter:
             "free_bytes": "bytes",
             # Size metrics
             "size_bytes": "bytes",
+            "alloc_bytes": "bytes",
+            "total_alloc_bytes": "bytes",
+            "sys_bytes": "bytes",
             # Count metrics
             "count": "operations",
             "sample_count": "samples",

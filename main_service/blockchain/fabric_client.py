@@ -1,9 +1,11 @@
 """Hyperledger Fabric client - calls blockchain service API."""
 
+import time
 from typing import Optional, Dict, Any
 import httpx
 from shared.config import settings
 from shared.logger import setup_logger
+from shared.monitoring.metrics import get_metrics_collector
 
 logger = setup_logger(__name__)
 
@@ -76,6 +78,7 @@ class FabricClient:
             "metadata": metadata,
         }
 
+        start = time.time()
         try:
             response = await self.client.post("/api/v1/model/register", json=payload)
             response.raise_for_status()
@@ -83,12 +86,30 @@ class FabricClient:
             tx_id = result.get("transaction_id")
             if not isinstance(tx_id, str):
                 raise ValueError("Response missing transaction_id")
+            duration = time.time() - start
+            get_metrics_collector().record_timing(
+                "blockchain_register",
+                duration,
+                metadata={
+                    "model_version_id": model_version_id,
+                    "iteration": metadata.get("iteration"),
+                    "transaction_id": tx_id,
+                },
+            )
             logger.info(
                 f"Registered model version {model_version_id} on blockchain: {tx_id}"
             )
             return tx_id
         except httpx.HTTPError as e:
-            logger.error(f"Failed to register model update: {str(e)}")
+            get_metrics_collector().record_timing(
+                "blockchain_register",
+                time.time() - start,
+                metadata={
+                    "model_version_id": model_version_id,
+                    "status": "error",
+                    "error": str(e),
+                },
+            )
             raise
 
     async def record_validation(
@@ -121,6 +142,7 @@ class FabricClient:
         if ipfs_cid:
             payload["ipfs_cid"] = ipfs_cid
 
+        start = time.time()
         try:
             response = await self.client.post("/api/v1/model/validate", json=payload)
             response.raise_for_status()
@@ -128,11 +150,25 @@ class FabricClient:
             tx_id = result.get("transaction_id")
             if not isinstance(tx_id, str):
                 raise ValueError("Response missing transaction_id")
+            get_metrics_collector().record_timing(
+                "blockchain_record_validation",
+                time.time() - start,
+                metadata={"model_version_id": model_version_id, "transaction_id": tx_id},
+            )
             logger.info(
                 f"Recorded validation for {model_version_id} on blockchain: {tx_id}"
             )
             return tx_id
         except httpx.HTTPError as e:
+            get_metrics_collector().record_timing(
+                "blockchain_record_validation",
+                time.time() - start,
+                metadata={
+                    "model_version_id": model_version_id,
+                    "status": "error",
+                    "error": str(e),
+                },
+            )
             logger.error(f"Failed to record validation: {str(e)}")
             raise
 
@@ -155,6 +191,7 @@ class FabricClient:
             "reason": reason,
         }
 
+        start = time.time()
         try:
             response = await self.client.post("/api/v1/model/rollback", json=payload)
             response.raise_for_status()
@@ -162,11 +199,28 @@ class FabricClient:
             tx_id = result.get("transaction_id")
             if not isinstance(tx_id, str):
                 raise ValueError("Response missing transaction_id")
+            get_metrics_collector().record_timing(
+                "blockchain_rollback",
+                time.time() - start,
+                metadata={
+                    "target_version_id": target_version_id,
+                    "transaction_id": tx_id,
+                },
+            )
             logger.info(
                 f"Recorded rollback to {target_version_id} on blockchain: {tx_id}"
             )
             return tx_id
         except httpx.HTTPError as e:
+            get_metrics_collector().record_timing(
+                "blockchain_rollback",
+                time.time() - start,
+                metadata={
+                    "target_version_id": target_version_id,
+                    "status": "error",
+                    "error": str(e),
+                },
+            )
             logger.error(f"Failed to record rollback: {str(e)}")
             raise
 
@@ -183,13 +237,29 @@ class FabricClient:
         if not self.client:
             raise RuntimeError("FabricClient must be used as async context manager")
 
+        start = time.time()
         try:
             response = await self.client.get(
                 f"/api/v1/model/provenance/{model_version_id}"
             )
             response.raise_for_status()
-            return _parse_json_response(response)
+            result = _parse_json_response(response)
+            get_metrics_collector().record_timing(
+                "blockchain_get_provenance",
+                time.time() - start,
+                metadata={"model_version_id": model_version_id},
+            )
+            return result
         except httpx.HTTPError as e:
+            get_metrics_collector().record_timing(
+                "blockchain_get_provenance",
+                time.time() - start,
+                metadata={
+                    "model_version_id": model_version_id,
+                    "status": "error",
+                    "error": str(e),
+                },
+            )
             logger.error(f"Failed to get provenance: {str(e)}")
             raise
 
@@ -204,20 +274,28 @@ class FabricClient:
         if not self.client:
             raise RuntimeError("FabricClient must be used as async context manager")
 
+        start = time.time()
         try:
             response = await self.client.get("/api/v1/model/rollback/latest")
             response.raise_for_status()
             result = _parse_json_response(response)
 
             rollback_event: Optional[Dict[str, Any]] = result.get("rollback_event")
+            get_metrics_collector().record_timing(
+                "blockchain_get_most_recent_rollback",
+                time.time() - start,
+                metadata={"found": rollback_event is not None},
+            )
             if rollback_event is None:
-                # No rollback events found
                 return None
-
             return rollback_event
         except httpx.HTTPError as e:
+            get_metrics_collector().record_timing(
+                "blockchain_get_most_recent_rollback",
+                time.time() - start,
+                metadata={"status": "error", "error": str(e)},
+            )
             if hasattr(e, "response") and e.response and e.response.status_code == 404:
-                # No rollback events found
                 return None
             logger.error(f"Failed to get most recent rollback: {str(e)}")
             raise
@@ -232,6 +310,7 @@ class FabricClient:
         if not self.client:
             raise RuntimeError("FabricClient must be used as async context manager")
 
+        start = time.time()
         try:
             response = await self.client.get("/api/v1/model/list")
             response.raise_for_status()
@@ -240,13 +319,27 @@ class FabricClient:
                 logger.warning(
                     f"Unexpected response type from blockchain service: {type(result)}"
                 )
-                return {"versions": [], "total": 0}
+                result = {"versions": [], "total": 0}
+            get_metrics_collector().record_timing(
+                "blockchain_list_models",
+                time.time() - start,
+                metadata={"total": result.get("total", 0)},
+            )
             return result
         except httpx.HTTPError as e:
+            get_metrics_collector().record_timing(
+                "blockchain_list_models",
+                time.time() - start,
+                metadata={"status": "error", "error": str(e)},
+            )
             logger.error(f"Failed to list models: {str(e)}")
-            # Return empty response instead of raising to allow graceful degradation
             return {"versions": [], "total": 0}
         except Exception as e:
+            get_metrics_collector().record_timing(
+                "blockchain_list_models",
+                time.time() - start,
+                metadata={"status": "error", "error": str(e)},
+            )
             logger.error(f"Unexpected error listing models: {str(e)}", exc_info=True)
             return {"versions": [], "total": 0}
 

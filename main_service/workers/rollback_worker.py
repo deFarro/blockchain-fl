@@ -1,6 +1,7 @@
 """Rollback worker that handles rollback operations."""
 
 import asyncio
+import time
 from typing import Optional, List, cast, Dict, Any
 from shared.queue.consumer import QueueConsumer
 from shared.queue.publisher import QueuePublisher
@@ -14,6 +15,7 @@ from shared.models.task import (
 from main_service.blockchain.fabric_client import FabricClient
 from shared.storage.ipfs_client import IPFSClient
 from shared.logger import setup_logger
+from shared.monitoring.metrics import get_metrics_collector
 from shared.config import settings
 from shared.utils.training import publish_train_task
 
@@ -50,18 +52,29 @@ class RollbackWorker:
         try:
             logger.info(f"Verifying rollback target weights: CID={target_weights_cid}")
 
+            start = time.time()
             async with IPFSClient() as ipfs_client:
                 weights_data = await ipfs_client.get_bytes(target_weights_cid)
-                if weights_data:
-                    logger.info(
-                        f"Rollback target weights verified: {len(weights_data)} bytes"
-                    )
-                    return True
-                else:
-                    logger.error(
-                        f"Rollback target weights not found: CID={target_weights_cid}"
-                    )
-                    return False
+            duration = time.time() - start
+            get_metrics_collector().record_timing(
+                "ipfs_download",
+                duration,
+                metadata={
+                    "cid": target_weights_cid,
+                    "size_bytes": len(weights_data) if weights_data else 0,
+                    "context": "rollback_verify",
+                },
+            )
+            if weights_data:
+                logger.info(
+                    f"Rollback target weights verified: {len(weights_data)} bytes"
+                )
+                return True
+            else:
+                logger.error(
+                    f"Rollback target weights not found: CID={target_weights_cid}"
+                )
+                return False
 
         except Exception as e:
             logger.error(

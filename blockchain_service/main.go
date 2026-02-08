@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/blockchain-fl/blockchain-service/fabric"
@@ -128,6 +129,20 @@ type GetProvenanceResponse struct {
 	Timestamp         string                 `json:"timestamp"`
 	ValidationStatus  string                 `json:"validation_status,omitempty"`
 	ValidationMetrics map[string]float64     `json:"validation_metrics,omitempty"`
+}
+
+// SystemMetricsResponse represents system metrics for the blockchain-service process (memory, etc.)
+type SystemMetricsResponse struct {
+	Timestamp string              `json:"timestamp"`
+	Memory    MemStatsSnapshot    `json:"memory"`
+}
+
+// MemStatsSnapshot is a subset of runtime.MemStats for export
+type MemStatsSnapshot struct {
+	AllocBytes      uint64 `json:"alloc_bytes"`
+	TotalAllocBytes uint64 `json:"total_alloc_bytes"`
+	SysBytes        uint64 `json:"sys_bytes"`
+	NumGC           uint32 `json:"num_gc"`
 }
 
 // HealthResponse represents health check response
@@ -462,6 +477,22 @@ func (bs *BlockchainService) health(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+func (bs *BlockchainService) systemMetrics(w http.ResponseWriter, r *http.Request) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	response := SystemMetricsResponse{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Memory: MemStatsSnapshot{
+			AllocBytes:      m.Alloc,
+			TotalAllocBytes: m.TotalAlloc,
+			SysBytes:        m.Sys,
+			NumGC:           m.NumGC,
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func main() {
 	port := os.Getenv("BLOCKCHAIN_SERVICE_PORT")
 	if port == "" {
@@ -479,6 +510,7 @@ func main() {
 
 	r := mux.NewRouter()
 	r.HandleFunc("/health", service.health).Methods("GET")
+	r.HandleFunc("/api/v1/system-metrics", service.systemMetrics).Methods("GET")
 	r.HandleFunc("/api/v1/model/register", service.registerModelUpdate).Methods("POST")
 	r.HandleFunc("/api/v1/model/validate", service.recordValidation).Methods("POST")
 	r.HandleFunc("/api/v1/model/rollback", service.rollbackModel).Methods("POST")

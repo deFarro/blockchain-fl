@@ -25,13 +25,15 @@ def _ipfs_cid_from_provenance(provenance: Dict[str, Any]) -> Optional[str]:
         or provenance.get("ipfs_cid")
         or provenance.get("ipfsCID")
     )
-    if cid:
+    if isinstance(cid, str):
         return cid
     history = metadata.get("validation_history") or []
     if isinstance(history, list):
         for record in reversed(history):
-            if isinstance(record, dict) and record.get("ipfs_cid"):
-                return record["ipfs_cid"]
+            if isinstance(record, dict):
+                val = record.get("ipfs_cid")
+                if isinstance(val, str):
+                    return val
     return None
 
 

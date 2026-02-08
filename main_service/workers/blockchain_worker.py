@@ -668,7 +668,6 @@ class BlockchainWorker:
         Returns:
             Transaction ID from blockchain service
         """
-        start_time = time.time()
         logger.info(
             f"Registering model version {model_version_id} on blockchain "
             f"(parent: {parent_version_id})"
@@ -687,36 +686,16 @@ class BlockchainWorker:
             if not isinstance(transaction_id, str):
                 raise ValueError(f"Expected str, got {type(transaction_id)}")
 
-            duration = time.time() - start_time
-            metrics_collector = get_metrics_collector()
-            metrics_collector.record_timing(
-                "blockchain_register",
-                duration,
-                metadata={
-                    "model_version_id": model_version_id,
-                    "iteration": metadata.get("iteration"),
-                    "transaction_id": transaction_id,
-                },
-            )
-            # Collect system metrics sample during blockchain operation
-            metrics_collector.collect_system_sample()
+            # Collect system metrics sample after blockchain operation (timing recorded in FabricClient)
+            get_metrics_collector().collect_system_sample()
 
             logger.info(
                 f"Model version {model_version_id} registered on blockchain: "
-                f"tx_id={transaction_id} (duration: {duration:.3f}s)"
+                f"tx_id={transaction_id}"
             )
             return transaction_id
-        except Exception as e:
-            duration = time.time() - start_time
-            get_metrics_collector().record_timing(
-                "blockchain_register",
-                duration,
-                metadata={
-                    "model_version_id": model_version_id,
-                    "status": "error",
-                    "error": str(e),
-                },
-            )
+        except Exception:
+            get_metrics_collector().collect_system_sample()
             raise
 
     async def _process_blockchain_write(
@@ -963,6 +942,22 @@ class BlockchainWorker:
 
             metrics_data = metrics_collector.get_metrics_for_export()
 
+            # Fetch blockchain-service process system metrics (snapshot at export time) if enabled
+            scenario = metrics_data.get("scenario_info", {})
+            if scenario.get("blockchain_enabled") and settings.blockchain_service_url:
+                try:
+                    bc_url = settings.blockchain_service_url.rstrip("/")
+                    resp = httpx.get(
+                        f"{bc_url}/api/v1/system-metrics",
+                        timeout=5.0,
+                    )
+                    resp.raise_for_status()
+                    metrics_data["blockchain_service_system_metrics"] = resp.json()
+                except Exception as e:
+                    logger.warning(
+                        "Could not fetch blockchain-service system metrics: %s", e
+                    )
+
             # Add training completion information
             metrics_data["training_completion"] = {
                 "final_model_version_id": payload.final_model_version_id,
@@ -1082,11 +1077,22 @@ class BlockchainWorker:
             )
 
             async def download_from_ipfs():
+                start = time.time()
                 async with IPFSClient() as ipfs_client:
                     aggregated_diff_bytes = await ipfs_client.get_bytes(
                         aggregated_diff_cid
                     )
-                    return aggregated_diff_bytes.decode("utf-8")
+                duration = time.time() - start
+                get_metrics_collector().record_timing(
+                    "ipfs_download",
+                    duration,
+                    metadata={
+                        "cid": aggregated_diff_cid,
+                        "size_bytes": len(aggregated_diff_bytes),
+                        "context": "blockchain_write",
+                    },
+                )
+                return aggregated_diff_bytes.decode("utf-8")
 
             aggregated_diff_str = loop.run_until_complete(download_from_ipfs())
             logger.info(

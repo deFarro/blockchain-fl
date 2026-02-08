@@ -448,6 +448,7 @@ async def manual_rollback(
                 target_weights_cid=ipfs_cid,
                 reason=f"Manual rollback: {request.reason}",
                 cutoff_version_id=None,  # Manual rollback doesn't specify cutoff
+                excluded_client_ids=None,  # Manual rollback doesn't exclude clients
             ).model_dump(),
             metadata=TaskMetadata(source="api_manual_rollback"),
             model_version_id=target_version_id,

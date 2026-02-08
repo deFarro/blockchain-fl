@@ -158,6 +158,23 @@ class MetricsCollector:
         """
         self._pending_iteration = iteration
 
+    @staticmethod
+    def _first_contiguous_sample_block(sorted_indices: List[int]) -> List[int]:
+        """
+        Return the first contiguous block of sample indices.
+        After rollback, an iteration can have many non-contiguous indices; we use
+        only the first run so the per-iteration summary does not span the whole run.
+        """
+        if not sorted_indices:
+            return []
+        block = [sorted_indices[0]]
+        for i in range(1, len(sorted_indices)):
+            if sorted_indices[i] == block[-1] + 1:
+                block.append(sorted_indices[i])
+            else:
+                break
+        return block
+
     def get_metrics(self) -> Dict[str, Any]:
         """
         Get all collected metrics including system metrics summary.
@@ -204,7 +221,9 @@ class MetricsCollector:
         prev_iteration_end_idx = 0
 
         for iteration in sorted_iterations:
-            sample_indices = self.iteration_system_samples[iteration]
+            raw_indices = self.iteration_system_samples[iteration]
+            # Use only the first contiguous block (avoids rollback re-run inflating the range)
+            sample_indices = self._first_contiguous_sample_block(sorted(raw_indices))
             if sample_indices:
                 # Get the range of samples for this iteration
                 start_idx = min(sample_indices)

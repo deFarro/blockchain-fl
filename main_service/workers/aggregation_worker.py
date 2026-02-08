@@ -73,10 +73,17 @@ class AggregationWorker:
         Returns:
             Weight diff as JSON string
         """
+        start = time.time()
         async with IPFSClient() as ipfs_client:
             weight_diff_bytes: bytes = await ipfs_client.get_bytes(cid)
-            weight_diff_str: str = weight_diff_bytes.decode("utf-8")
-            return weight_diff_str
+        duration = time.time() - start
+        get_metrics_collector().record_timing(
+            "ipfs_download",
+            duration,
+            metadata={"cid": cid, "size_bytes": len(weight_diff_bytes)},
+        )
+        weight_diff_str: str = weight_diff_bytes.decode("utf-8")
+        return weight_diff_str
 
     def _fedavg_aggregate(
         self,

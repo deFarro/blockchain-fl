@@ -87,8 +87,9 @@ class Caltech101Dataset(DatasetInterface):
         If client_id and num_clients are provided, returns only that client's slice.
         If not provided, returns full training partition.
         """
-        self._load_full_dataset()
-        train_dataset = Subset(self._full_dataset, self._train_indices)
+        full = self._load_full_dataset()
+        assert self._train_indices is not None, "Train indices set by _load_full_dataset"
+        train_dataset = Subset(full, self._train_indices)
 
         if client_id is None or num_clients is None:
             return train_dataset
@@ -127,7 +128,8 @@ class Caltech101Dataset(DatasetInterface):
         # Subset of Subset: we need indices into the original train indices
         base_indices = train_dataset.indices  # type: ignore[attr-defined]
         mapped = [base_indices[i] for i in client_indices]
-        return Subset(self._full_dataset, mapped)
+        full = self._load_full_dataset()
+        return Subset(full, mapped)
 
     def _get_non_iid_slice(
         self,
@@ -137,13 +139,14 @@ class Caltech101Dataset(DatasetInterface):
         seed: int,
     ) -> Subset:
         """Get non-IID slice (class-based) for a specific client."""
+        full = self._load_full_dataset()
         num_classes = self.get_num_classes()
         np.random.seed(seed)
         torch.manual_seed(seed)
         base_indices = train_dataset.indices  # type: ignore[attr-defined]
         class_indices: dict[int, list[int]] = {i: [] for i in range(num_classes)}
         for pos, idx in enumerate(base_indices):
-            _, label = self._full_dataset[idx]
+            _, label = full[idx]
             class_indices[int(label)].append(pos)
         classes_per_client = max(1, num_classes // num_clients)
         start_class = client_id * classes_per_client
@@ -158,12 +161,13 @@ class Caltech101Dataset(DatasetInterface):
             client_positions.extend(class_indices[c])
         np.random.shuffle(client_positions)
         mapped = [base_indices[i] for i in client_positions]
-        return Subset(self._full_dataset, mapped)
+        return Subset(full, mapped)
 
     def load_test_data(self) -> Dataset:
         """Load test partition of Caltech101."""
-        self._load_full_dataset()
-        return Subset(self._full_dataset, self._test_indices)
+        full = self._load_full_dataset()
+        assert self._test_indices is not None, "Test indices set by _load_full_dataset"
+        return Subset(full, self._test_indices)
 
     def get_num_classes(self) -> int:
         """Get number of classes (101 object categories)."""
@@ -171,9 +175,9 @@ class Caltech101Dataset(DatasetInterface):
 
     def get_class_names(self) -> list:
         """Get class names (categories from dataset if available)."""
-        self._load_full_dataset()
-        if hasattr(self._full_dataset, "categories"):
-            return list(self._full_dataset.categories)
+        full = self._load_full_dataset()
+        if hasattr(full, "categories"):
+            return list(full.categories)
         return [f"class_{i}" for i in range(self.get_num_classes())]
 
     def get_in_channels(self) -> int:

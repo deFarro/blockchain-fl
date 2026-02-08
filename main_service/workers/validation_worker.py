@@ -95,10 +95,17 @@ class ValidationWorker:
         """
         logger.info(f"Retrieving encrypted diff from IPFS: CID={ipfs_cid}")
 
-        # Retrieve from IPFS
+        # Retrieve from IPFS (with latency metrics)
+        start = time.time()
         async with IPFSClient() as ipfs_client:
             encrypted_diff = await ipfs_client.get_bytes(ipfs_cid)
-            logger.debug(f"Retrieved {len(encrypted_diff)} bytes from IPFS")
+        duration = time.time() - start
+        get_metrics_collector().record_timing(
+            "ipfs_download",
+            duration,
+            metadata={"cid": ipfs_cid, "size_bytes": len(encrypted_diff)},
+        )
+        logger.debug(f"Retrieved {len(encrypted_diff)} bytes from IPFS")
 
         # Decrypt
         logger.info("Decrypting diff...")
@@ -148,12 +155,24 @@ class ValidationWorker:
                 )
                 return self.model.get_weights()
 
-            # Download and decrypt parent weights from IPFS
+            # Download and decrypt parent weights from IPFS (with latency metrics)
             logger.info(
                 f"Downloading parent weights from IPFS: CID={parent_weights_cid}"
             )
+            start = time.time()
             async with IPFSClient() as ipfs_client:
                 encrypted_weights = await ipfs_client.get_bytes(parent_weights_cid)
+            duration = time.time() - start
+            get_metrics_collector().record_timing(
+                "ipfs_download",
+                duration,
+                metadata={
+                    "cid": parent_weights_cid,
+                    "size_bytes": len(encrypted_weights),
+                    "context": "parent_weights",
+                    "parent_version_id": parent_version_id,
+                },
+            )
 
             # Decrypt weights
             decrypted_weights = self.encryption_service.decrypt_diff(encrypted_weights)

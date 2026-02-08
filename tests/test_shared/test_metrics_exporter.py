@@ -240,6 +240,33 @@ class TestInitializeCsvFile:
         assert "ipfs_on" in path.name
 
 
+class TestFirstContiguousSampleBlock:
+    """Tests for _first_contiguous_sample_block (rollback / non-contiguous samples)."""
+
+    def test_empty_returns_empty(self):
+        """Empty list returns empty list."""
+        assert MetricsExporter._first_contiguous_sample_block([]) == []
+
+    def test_single_element(self):
+        """Single index returns that index."""
+        assert MetricsExporter._first_contiguous_sample_block([5]) == [5]
+
+    def test_fully_contiguous(self):
+        """Fully contiguous indices are returned as-is."""
+        assert MetricsExporter._first_contiguous_sample_block([1, 2, 3]) == [1, 2, 3]
+        assert MetricsExporter._first_contiguous_sample_block([0, 1]) == [0, 1]
+
+    def test_gap_returns_first_block_only(self):
+        """When there is a gap (e.g. after rollback), only the first contiguous block is returned."""
+        # Simulates iteration 5: first run [2,3], then re-run [50..120]
+        assert MetricsExporter._first_contiguous_sample_block([2, 3, 50, 51, 52]) == [2, 3]
+        assert MetricsExporter._first_contiguous_sample_block([0, 1, 10, 11, 12]) == [0, 1]
+
+    def test_single_then_gap(self):
+        """First block of one, then gap."""
+        assert MetricsExporter._first_contiguous_sample_block([7, 20, 21]) == [7]
+
+
 class TestDeletePreviousCsvFiles:
     """Tests for _delete_previous_csv_files."""
 
@@ -297,3 +324,58 @@ class TestAppendIterationMetrics:
         # Should have created a new CSV via export_to_csv
         csv_files = list(tmp_path.glob("metrics_*.csv"))
         assert len(csv_files) == 1
+
+    def test_append_uses_first_contiguous_block_for_system_summary(self, tmp_path):
+        """When an iteration has non-contiguous sample indices (e.g. after rollback),
+        per-iteration system summary is computed from the first contiguous block only."""
+        exporter = MetricsExporter(output_dir=tmp_path)
+        scenario = {"blockchain_enabled": True, "ipfs_enabled": False}
+        exporter.initialize_csv_file(scenario_info=scenario, filename="append_block.csv")
+
+        # Collector: iteration 1 has samples [0, 1, 50, 51] (first run then re-run after rollback)
+        mock_system = MagicMock()
+        mock_system.sample_count = 52
+        small_summary = {
+            "sample_count": 2,
+            "duration_seconds": 0.5,
+            "cpu": {"total_time_seconds": 0.3},
+            "memory": {"avg_used_bytes": 1000, "max_used_bytes": 2000, "min_used_bytes": 500},
+            "network": {"total_bytes_sent": 10, "total_bytes_recv": 20},
+            "disk": {"total_bytes_read": 0, "total_bytes_written": 0},
+        }
+        mock_system.get_summary.return_value = small_summary
+
+        collector = MagicMock()
+        collector.iteration_system_samples = {1: [0, 1, 50, 51]}
+        collector.system_metrics = mock_system
+        collector.operation_metadata = {"fedavg_aggregation": [{"iteration": 1}]}
+        collector.get_metrics.return_value = {
+            "scenario_info": scenario,
+            "system_metrics": small_summary,
+            "detailed_timings": {
+                "fedavg_aggregation": {
+                    "timings": [1.0],
+                    "metadata": [{"iteration": 1, "num_clients": 2, "total_samples": 100, "excluded_clients": 0}],
+                },
+            },
+        }
+
+        exporter.append_iteration_metrics(1, collector)
+
+        # get_summary must be called with the first contiguous block only (0, 1) -> start=0, end=2
+        calls = mock_system.get_summary.call_args_list
+        assert len(calls) >= 1
+        kwargs = calls[0][1]
+        assert kwargs.get("start_idx") == 0
+        assert kwargs.get("end_idx") == 2
+
+        # CSV row should have small system_* values (from first block), not global
+        with open(tmp_path / "append_block.csv", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        assert len(rows) >= 1
+        row = rows[0]
+        sample_count_key = next((k for k in row if "system" in k and "sample_count" in k), None)
+        assert sample_count_key, "expected a system_sample_count column"
+        val = row[sample_count_key].strip()
+        assert val in ("2", "2.000000"), f"expected per-iteration count 2, got {val!r}"

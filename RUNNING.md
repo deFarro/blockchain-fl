@@ -423,8 +423,9 @@ The metrics system consists of:
    - Tracks system metrics per iteration
 
 2. **SystemMetricsCollector** (`shared/monitoring/system_metrics.py`)
-   - Collects system-level metrics (CPU, memory, network, disk)
+   - Collects system-level metrics (CPU, memory, network, disk) **from the main_service process only** (in-process via psutil)
    - Provides summary statistics per iteration
+   - **Blockchain service:** When blockchain is enabled, a snapshot of the blockchain_service process (Go) memory is fetched at export time and included as `blockchain_service_system_metrics` in the CSV
 
 3. **MetricsExporter** (`shared/monitoring/metrics_exporter.py`)
    - Exports metrics to CSV format
@@ -562,22 +563,59 @@ The exported CSV file contains flattened metrics with columns like:
 
 ### Metrics Collected Per Operation
 
-#### Blockchain Operations
-- `blockchain_register`: Model version registration
-  - Duration per operation
-  - Transaction IDs
-  - Model version IDs
-  - Iteration numbers
+#### Blockchain Operations (blockchain-service API)
+
+All blockchain-service calls are timed in `FabricClient` so you can isolate total blockchain overhead:
+
+- `blockchain_register`: Register model version (POST /api/v1/model/register)
+  - Duration per call, transaction_id, model_version_id, iteration
+- `blockchain_record_validation`: Record validation result (POST /api/v1/model/validate)
+  - Duration per call, model_version_id, transaction_id
+- `blockchain_rollback`: Record rollback event (POST /api/v1/model/rollback)
+  - Duration per call, target_version_id, transaction_id
+- `blockchain_get_provenance`: Get model provenance (GET /api/v1/model/provenance/{id})
+  - Duration per call, model_version_id
+- `blockchain_get_most_recent_rollback`: Get latest rollback (GET /api/v1/model/rollback/latest)
+  - Duration per call, metadata `found`
+- `blockchain_list_models`: List all model versions (GET /api/v1/model/list)
+  - Duration per call, metadata `total`
+
+**Blockchain-service overhead:** To get the exact overhead of calling the blockchain-service, sum all blockchain call durations. Each CSV row corresponds to a timing sample; columns like `timing_blockchain_register_duration (seconds)` hold one duration per call. Example:
+
+```python
+import pandas as pd
+df = pd.read_csv('metrics_bc_on_ipfs_on.csv')
+# All blockchain duration columns (header may include " (seconds)")
+blockchain_duration_cols = [c for c in df.columns if c.startswith('timing_blockchain_') and 'duration' in c]
+# Total time spent in blockchain-service calls (sum of all cells in those columns)
+total_blockchain_seconds = df[blockchain_duration_cols].sum().sum()
+# Per-operation breakdown
+for col in blockchain_duration_cols:
+    print(col, df[col].sum())
+```
 
 #### IPFS Operations
-- `ipfs_upload`: Model weight/diff uploads
+- `ipfs_upload`: Model weight/diff uploads (storage worker)
   - Duration per upload
-  - File sizes
+  - File sizes (`size_bytes`)
   - CID returned
-- `ipfs_download`: Model weight/diff downloads
+- `ipfs_download`: Model weight/diff downloads (storage, aggregation, validation, rollback, blockchain workers)
   - Duration per download
-  - File sizes
-  - CID requested
+  - File sizes (`size_bytes`)
+  - CID requested; optional `context` (e.g. `parent_weights`, `rollback_verify`, `blockchain_write`) for filtering
+
+**Isolating IPFS metrics:** To analyze only IPFS latency, filter CSV columns by prefix `timing_ipfs_`. Example:
+
+```python
+import pandas as pd
+df = pd.read_csv('metrics_20240115_143022_bc_on_ipfs_on.csv')
+ipfs_cols = [c for c in df.columns if c.startswith('timing_ipfs_')]
+ipfs_only = df[['timing_sample_index'] + ipfs_cols].dropna(how='all', subset=ipfs_cols)
+# Per-sample IPFS upload latency (seconds)
+upload_duration = df['timing_ipfs_upload_duration (seconds)']
+# Per-sample IPFS download latency (seconds)
+download_duration = df['timing_ipfs_download_duration (seconds)']
+```
 
 #### Aggregation Operations
 - `fedavg_aggregation`: Client update aggregation
