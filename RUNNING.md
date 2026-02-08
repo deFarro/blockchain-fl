@@ -565,6 +565,8 @@ The exported CSV file contains flattened metrics with columns like:
 
 #### Blockchain Operations (blockchain-service API)
 
+When blockchain is enabled and the blockchain service is not connected to Fabric, it uses a **local hash-linked chain** (development mode). You can verify it with `GET http://localhost:8080/api/v1/chain` (returns `mode=local_chain`, `length`, `valid`).
+
 All blockchain-service calls are timed in `FabricClient` so you can isolate total blockchain overhead:
 
 - `blockchain_register`: Register model version (POST /api/v1/model/register)

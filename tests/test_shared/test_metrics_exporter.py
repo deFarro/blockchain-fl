@@ -164,7 +164,8 @@ class TestFlattenMetrics:
         assert len(rows) == 2
         assert rows[0].get("timing_op1_duration") == 0.1 or "timing_op1_duration" in rows[0]
         assert rows[1].get("timing_op1_duration") == 0.2 or "timing_op1_duration" in rows[1]
-        assert rows[0].get("scenario_blockchain_enabled") == "true"
+        # scenario_blockchain_enabled is not exported (excluded from CSV)
+        assert "scenario_blockchain_enabled" not in rows[0]
 
 
 class TestExportToCsv:

@@ -26,6 +26,8 @@ class MetricsCollector:
         self.iteration_system_samples: Dict[int, List[int]] = {}
         # Track which sample index corresponds to which iteration
         self.sample_to_iteration: Dict[int, int] = {}
+        # Per-iteration blockchain-service process metrics (iteration -> GET /api/v1/system-metrics response)
+        self.iteration_blockchain_service_metrics: Dict[int, Dict[str, Any]] = {}
         # Pending iteration for the next collect_system_sample() (set by record_timing or set_pending_iteration)
         self._pending_iteration: Optional[int] = None
 
@@ -111,6 +113,18 @@ class MetricsCollector:
             log_data.update(metadata)
 
         logger.info("Counter metric", extra=log_data)
+
+    def record_blockchain_service_metrics(
+        self, iteration: int, data: Dict[str, Any]
+    ) -> None:
+        """
+        Record blockchain-service process metrics for a given iteration.
+
+        Args:
+            iteration: FL iteration number
+            data: Response from GET blockchain_service_url/api/v1/system-metrics
+        """
+        self.iteration_blockchain_service_metrics[iteration] = dict(data)
 
     def set_scenario_info(self, scenario_info: Dict[str, Any]) -> None:
         """
@@ -260,6 +274,7 @@ class MetricsCollector:
             "detailed_timings": metrics.get("detailed_timings", {}),
             "iteration_system_samples": self.iteration_system_samples.copy(),
             "iteration_system_metrics": iteration_system_metrics,
+            "iteration_blockchain_service_metrics": self.iteration_blockchain_service_metrics.copy(),
         }
 
         # Add operation summaries
@@ -277,6 +292,7 @@ class MetricsCollector:
         self.scenario_info.clear()
         self.iteration_system_samples.clear()
         self.sample_to_iteration.clear()
+        self.iteration_blockchain_service_metrics.clear()
         self._pending_iteration = None
         if hasattr(self, "_timing_to_iteration"):
             self._timing_to_iteration.clear()

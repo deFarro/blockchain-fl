@@ -51,10 +51,12 @@ class Settings(BaseSettings):
 
     # Aggregation Configuration (for main service)
     min_clients_for_aggregation: int = 1
-    aggregation_timeout: int = 60  # seconds to wait for client updates
+    aggregation_timeout: int = 300  # seconds to wait for client updates
 
     # Client exclusion: populated at rollback when unreliable clients are identified (individual-diff diagnosis)
-    excluded_clients: List[str] = []  # Client IDs to exclude from aggregation (no env; set at runtime)
+    excluded_clients: List[str] = (
+        []
+    )  # Client IDs to exclude from aggregation (no env; set at runtime)
     add_unreliable_client: bool = False
 
     # Dataset Configuration
@@ -64,8 +66,12 @@ class Settings(BaseSettings):
     target_accuracy: float = 95.0  # Target accuracy to achieve (percentage)
     max_iterations: int = 100  # Maximum training iterations
     max_rollbacks: int = 5  # Maximum rollbacks before stopping
-    convergence_patience: int = 10  # Iterations without improvement of >= accuracy_tolerance before convergence
-    accuracy_tolerance: float = 0.5  # Rollback: allowed drop; convergence: min improvement to count as "improved" (%)
+    convergence_patience: int = (
+        10  # Iterations without improvement of >= accuracy_tolerance before convergence
+    )
+    accuracy_tolerance: float = (
+        0.5  # Rollback: allowed drop; convergence: min improvement to count as "improved" (%)
+    )
     patience_threshold: int = 3  # Consecutive bad iterations before rollback
     severe_drop_threshold: float = 2.0  # Immediate rollback threshold (percentage)
     num_clients: int = 2  # Number of client instances

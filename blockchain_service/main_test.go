@@ -83,14 +83,14 @@ func TestRegisterModelUpdate(t *testing.T) {
 		t.Error("handler returned empty transaction ID")
 	}
 
-	// Verify record was stored (in development mode)
+	// Verify record was stored in chain (development mode)
 	if !service.useFabric {
-		record, exists := service.records["test_version_1"]
+		version, exists := service.getVersionFromChain("test_version_1")
 		if !exists {
-			t.Error("record was not stored in memory")
+			t.Error("version was not stored in chain")
 		}
-		if record.Hash != "test_hash_123" {
-			t.Errorf("record hash mismatch: got %v want %v", record.Hash, "test_hash_123")
+		if version.Hash != "test_hash_123" {
+			t.Errorf("version hash mismatch: got %v want %v", version.Hash, "test_hash_123")
 		}
 	}
 }
@@ -332,16 +332,18 @@ func TestNewBlockchainService(t *testing.T) {
 		t.Fatal("NewBlockchainService returned nil")
 	}
 
-	if service.records == nil {
-		t.Error("records map was not initialized")
+	if service.localChain == nil {
+		t.Error("localChain was not initialized")
+	}
+	if service.localChain.Len() < 1 {
+		t.Error("localChain should have at least genesis block")
 	}
 
 	// In development mode (no Fabric configured), useFabric should be false
-	// This is expected behavior when running tests
 	if service.useFabric {
 		t.Log("Note: Fabric is configured, running in blockchain mode")
 	} else {
-		t.Log("Note: Running in development mode (in-memory storage)")
+		t.Log("Note: Running in development mode (local chain only)")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/blockchain-fl/blockchain-service/chain"
 	"github.com/blockchain-fl/blockchain-service/fabric"
 	"github.com/gorilla/mux"
 )
@@ -43,21 +44,28 @@ type RollbackEvent struct {
 	Type         string `json:"type"`
 }
 
+// validationOverlay holds validation results for a version (chain blocks are immutable).
+type validationOverlay struct {
+	ValidationStatus  string
+	ValidationMetrics map[string]float64
+	IPFSCID           string
+}
+
 // BlockchainService handles blockchain operations
 type BlockchainService struct {
 	fabricClient *fabric.FabricClient
-	// In-memory storage for development mode (when Fabric is not configured)
-	records         map[string]ModelVersion
-	rollbackEvents  []RollbackEvent // Track rollback events in development mode
-	useFabric       bool
+	useFabric    bool
+	// Development mode: local chain only (versions + rollback events on chain)
+	localChain        *chain.LocalChain
+	validationOverlay  map[string]validationOverlay // version_id -> validation data
 }
 
 // NewBlockchainService creates a new blockchain service
 func NewBlockchainService() *BlockchainService {
 	service := &BlockchainService{
-		records:        make(map[string]ModelVersion),
-		rollbackEvents: make([]RollbackEvent, 0),
-		useFabric:      false,
+		localChain:        chain.NewLocalChain(),
+		validationOverlay: make(map[string]validationOverlay),
+		useFabric:         false,
 	}
 
 	// Try to initialize Fabric client
@@ -67,11 +75,35 @@ func NewBlockchainService() *BlockchainService {
 		service.useFabric = true
 		log.Println("Using Hyperledger Fabric for blockchain operations")
 	} else {
-		log.Println("Fabric not configured, using development mode (in-memory storage)")
-		log.Printf("Fabric initialization error: %v", err)
+		log.Println("Development mode: using local blockchain only (chain-only storage)")
+		log.Println("  Verify: GET http://localhost:8080/api/v1/chain returns length and valid")
+		log.Printf("  Fabric init skipped: %v", err)
 	}
 
 	return service
+}
+
+// getVersionFromChain returns the model version for versionID from the local chain, with validation overlay applied. ok is false if not found.
+func (bs *BlockchainService) getVersionFromChain(versionID string) (ModelVersion, bool) {
+	block := bs.localChain.BlockByVersionID(versionID)
+	if block == nil || len(block.Payload) == 0 {
+		return ModelVersion{}, false
+	}
+	var v ModelVersion
+	if err := json.Unmarshal(block.Payload, &v); err != nil {
+		return ModelVersion{}, false
+	}
+	if overlay, has := bs.validationOverlay[versionID]; has {
+		v.ValidationStatus = overlay.ValidationStatus
+		v.ValidationMetrics = overlay.ValidationMetrics
+		if overlay.IPFSCID != "" {
+			if v.Metadata == nil {
+				v.Metadata = make(map[string]interface{})
+			}
+			v.Metadata["ipfs_cid"] = overlay.IPFSCID
+		}
+	}
+	return v, true
 }
 
 // RegisterModelUpdateRequest represents a request to register a model update
@@ -150,6 +182,14 @@ type HealthResponse struct {
 	Status string `json:"status"`
 }
 
+// ChainInfoResponse is returned by GET /api/v1/chain (dev mode)
+type ChainInfoResponse struct {
+	Mode    string `json:"mode"`    // "local_chain" when using chain-only storage
+	Length  int    `json:"length"`  // number of blocks including genesis
+	Valid   bool   `json:"valid"`   // chain integrity (hash links)
+	Message string `json:"message"` // how to interpret the response
+}
+
 // ListModelsResponse represents the response for listing all models
 type ListModelsResponse struct {
 	Versions []GetProvenanceResponse `json:"versions"`
@@ -218,7 +258,7 @@ func (bs *BlockchainService) registerModelUpdate(w http.ResponseWriter, r *http.
 	}
 
 	if !bs.useFabric {
-		// Fallback to in-memory storage
+		// Chain-only: append block with version payload
 		version := ModelVersion{
 			VersionID:       req.ModelVersionID,
 			ParentVersionID: req.ParentVersionID,
@@ -226,8 +266,9 @@ func (bs *BlockchainService) registerModelUpdate(w http.ResponseWriter, r *http.
 			Metadata:        req.Metadata,
 			Timestamp:       fmt.Sprintf("%d", time.Now().Unix()),
 		}
-		bs.records[req.ModelVersionID] = version
-		txID = fmt.Sprintf("tx_%s", req.ModelVersionID)
+		payload, _ := json.Marshal(version)
+		blockHash, _ := bs.localChain.AddBlock(req.ModelVersionID, payload)
+		txID = blockHash
 	}
 
 	response := RegisterModelUpdateResponse{
@@ -265,22 +306,19 @@ func (bs *BlockchainService) recordValidation(w http.ResponseWriter, r *http.Req
 	}
 
 	if !bs.useFabric {
-		// Fallback to in-memory storage
-		// Update the stored version with validation data
-		if version, exists := bs.records[req.ModelVersionID]; exists {
-			version.ValidationStatus = "passed"
-			if req.Accuracy < 0.5 {
-				version.ValidationStatus = "failed"
-			}
-			version.ValidationMetrics = req.Metrics
-			// Update IPFS CID in metadata if provided
-			if req.IPFSCID != "" {
-				if version.Metadata == nil {
-					version.Metadata = make(map[string]interface{})
-				}
-				version.Metadata["ipfs_cid"] = req.IPFSCID
-			}
-			bs.records[req.ModelVersionID] = version
+		// Chain-only: validation overlay (block must exist in chain)
+		if bs.localChain.BlockByVersionID(req.ModelVersionID) == nil {
+			http.Error(w, "version not found in chain", http.StatusNotFound)
+			return
+		}
+		status := "passed"
+		if req.Accuracy < 0.5 {
+			status = "failed"
+		}
+		bs.validationOverlay[req.ModelVersionID] = validationOverlay{
+			ValidationStatus:  status,
+			ValidationMetrics: req.Metrics,
+			IPFSCID:           req.IPFSCID,
 		}
 		log.Printf("Validation recorded: version=%s, accuracy=%.4f", req.ModelVersionID, req.Accuracy)
 		txID = fmt.Sprintf("tx_validation_%s", req.ModelVersionID)
@@ -324,11 +362,7 @@ func (bs *BlockchainService) rollbackModel(w http.ResponseWriter, r *http.Reques
 	}
 
 	if !bs.useFabric {
-		// Fallback to in-memory storage
-		log.Printf("Rollback requested: target_version=%s, reason=%s", req.TargetVersionID, req.Reason)
-		txID = fmt.Sprintf("tx_rollback_%s", req.TargetVersionID)
-		
-		// Store rollback event in memory for development mode
+		// Chain-only: append rollback event as a block
 		rollbackEvent := RollbackEvent{
 			FromVersionID:   "",
 			ToVersionID:     req.TargetVersionID,
@@ -338,7 +372,9 @@ func (bs *BlockchainService) rollbackModel(w http.ResponseWriter, r *http.Reques
 			Timestamp:       fmt.Sprintf("%d", time.Now().Unix()),
 			Type:            "manual",
 		}
-		bs.rollbackEvents = append(bs.rollbackEvents, rollbackEvent)
+		payload, _ := json.Marshal(rollbackEvent)
+		txID, _ = bs.localChain.AddRollbackBlock(payload)
+		log.Printf("Rollback requested: target_version=%s, reason=%s", req.TargetVersionID, req.Reason)
 	}
 
 	response := RollbackModelResponse{
@@ -373,14 +409,16 @@ func (bs *BlockchainService) getMostRecentRollback(w http.ResponseWriter, r *htt
 	}
 
 	if !bs.useFabric {
-		// Fallback to in-memory storage
-		// Return the most recent rollback event from memory
-		if len(bs.rollbackEvents) > 0 {
-			// Get the most recent rollback event (last one in the slice)
-			mostRecent := bs.rollbackEvents[len(bs.rollbackEvents)-1]
-			rollbackEvent = &mostRecent
-		} else {
-			rollbackEvent = nil
+		// Chain-only: most recent rollback block payload
+		payload := bs.localChain.GetMostRecentRollbackPayload()
+		if len(payload) > 0 {
+			var event RollbackEvent
+			if err := json.Unmarshal(payload, &event); err == nil {
+				if event.TargetVersionID == "" && event.ToVersionID != "" {
+					event.TargetVersionID = event.ToVersionID
+				}
+				rollbackEvent = &event
+			}
 		}
 	}
 
@@ -414,8 +452,8 @@ func (bs *BlockchainService) getProvenance(w http.ResponseWriter, r *http.Reques
 		bs.useFabric = false
 	}
 
-	// Fallback to in-memory storage
-	version, exists := bs.records[versionID]
+	// Chain-only: read from chain + overlay
+	version, exists := bs.getVersionFromChain(versionID)
 	if !exists {
 		http.Error(w, "Version not found", http.StatusNotFound)
 		return
@@ -446,8 +484,15 @@ func (bs *BlockchainService) listModels(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if !bs.useFabric {
-		// Fallback to in-memory storage
-		for _, version := range bs.records {
+		// Chain-only: iterate blocks (skip genesis and rollback blocks), merge overlay
+		for _, block := range bs.localChain.Chain() {
+			if block.VersionID == "" || block.VersionID == chain.RollbackBlockVersionID {
+				continue
+			}
+			version, ok := bs.getVersionFromChain(block.VersionID)
+			if !ok {
+				continue
+			}
 			versions = append(versions, GetProvenanceResponse{
 				VersionID:         version.VersionID,
 				ParentVersionID:   version.ParentVersionID,
@@ -472,6 +517,25 @@ func (bs *BlockchainService) listModels(w http.ResponseWriter, r *http.Request) 
 func (bs *BlockchainService) health(w http.ResponseWriter, r *http.Request) {
 	response := HealthResponse{
 		Status: "healthy",
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (bs *BlockchainService) chainInfo(w http.ResponseWriter, r *http.Request) {
+	if bs.useFabric {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ChainInfoResponse{
+			Mode: "fabric", Length: 0, Valid: true,
+			Message: "Using Hyperledger Fabric; chain info not exposed here.",
+		})
+		return
+	}
+	response := ChainInfoResponse{
+		Mode:    "local_chain",
+		Length:  bs.localChain.Len(),
+		Valid:   bs.localChain.Validate(),
+		Message: "Development mode: storage is chain-only. length=blocks (genesis+versions), valid=hash chain integrity.",
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -517,13 +581,15 @@ func main() {
 	r.HandleFunc("/api/v1/model/rollback/latest", service.getMostRecentRollback).Methods("GET")
 	r.HandleFunc("/api/v1/model/provenance/{version_id}", service.getProvenance).Methods("GET")
 	r.HandleFunc("/api/v1/model/list", service.listModels).Methods("GET")
+	r.HandleFunc("/api/v1/chain", service.chainInfo).Methods("GET")
 
 	log.Printf("Blockchain service starting on port %s", port)
 	if service.useFabric {
 		log.Println("Connected to Hyperledger Fabric network")
 	} else {
-		log.Println("⚠ Running in development mode (in-memory storage)")
-		log.Println("  To use Fabric, configure FABRIC_NETWORK_PROFILE and FABRIC_WALLET_PATH")
+		log.Println("Development mode: local blockchain only (chain-only storage)")
+		log.Printf("  Verify chain: GET http://localhost:%s/api/v1/chain → mode=local_chain, length, valid", port)
+		log.Println("  To use Fabric, set FABRIC_NETWORK_PROFILE and FABRIC_WALLET_PATH")
 	}
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), r))
 }

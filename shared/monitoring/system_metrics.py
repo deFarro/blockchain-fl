@@ -1,6 +1,7 @@
 """System metrics collection utilities."""
 
 import time
+from types import SimpleNamespace
 from typing import Dict, Any, Optional, cast
 from shared.logger import setup_logger
 import psutil
@@ -40,8 +41,25 @@ class SystemMetricsCollector:
             # Network metrics
             network_io = psutil.net_io_counters()
 
-            # Disk metrics
+            # Disk metrics (perdisk=True fallback when system-wide returns None, e.g. some macOS/containers)
             disk_io = psutil.disk_io_counters()
+            if disk_io is None:
+                perdisk = psutil.disk_io_counters(perdisk=True)
+                if perdisk:
+                    read_bytes = sum(getattr(d, "read_bytes", 0) for d in perdisk.values())
+                    write_bytes = sum(getattr(d, "write_bytes", 0) for d in perdisk.values())
+                    read_count = sum(getattr(d, "read_count", 0) for d in perdisk.values())
+                    write_count = sum(getattr(d, "write_count", 0) for d in perdisk.values())
+                    disk_io = SimpleNamespace(
+                        read_bytes=read_bytes,
+                        write_bytes=write_bytes,
+                        read_count=read_count,
+                        write_count=write_count,
+                    )
+                else:
+                    disk_io = SimpleNamespace(
+                        read_bytes=0, write_bytes=0, read_count=0, write_count=0
+                    )
             disk_usage = psutil.disk_usage("/")
 
             # Get CPU times for absolute measurement (cumulative CPU time)

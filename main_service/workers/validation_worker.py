@@ -441,6 +441,9 @@ class ValidationWorker:
                                 "target_accuracy": settings.target_accuracy,
                                 "max_iterations": settings.max_iterations,
                                 "max_rollbacks": settings.max_rollbacks,
+                                "dataset_name": getattr(
+                                    settings, "dataset_name", "unknown"
+                                ),
                             }
                         exporter.initialize_csv_file(scenario_info)
 

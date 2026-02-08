@@ -569,7 +569,8 @@ async def start_training(
                 "target_accuracy": settings.target_accuracy,
                 "max_iterations": settings.max_iterations,
                 "max_rollbacks": settings.max_rollbacks,
-                "dataset_name": getattr(request, "dataset_name", "unknown"),
+                "dataset_name": getattr(request, "dataset_name", None)
+                or getattr(settings, "dataset_name", "unknown"),
             }
 
             metrics_collector = get_metrics_collector()

@@ -977,6 +977,7 @@ class BlockchainWorker:
                     "target_accuracy": settings.target_accuracy,
                     "max_iterations": settings.max_iterations,
                     "max_rollbacks": settings.max_rollbacks,
+                    "dataset_name": getattr(settings, "dataset_name", "unknown"),
                 }
                 metrics_data["scenario_info"] = scenario_info
 

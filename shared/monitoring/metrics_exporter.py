@@ -7,6 +7,11 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from shared.logger import setup_logger
 
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore
+
 logger = setup_logger(__name__)
 
 # Module-level variables to track active CSV file across instances
@@ -112,8 +117,12 @@ class MetricsExporter:
         # Create a dummy row to determine all possible fieldnames.
         # Include all known operations so the header has every timing_* column
         # (otherwise initialize+append would drop columns for operations not in the dummy).
+        # Exclude blockchain_enabled from export (used only for filename).
+        scenario_info_for_export = {
+            k: v for k, v in scenario_info.items() if k != "blockchain_enabled"
+        }
         dummy_metrics = {
-            "scenario_info": scenario_info,
+            "scenario_info": scenario_info_for_export,
             "system_metrics": {
                 "sample_count": 0,
                 "duration_seconds": 0.0,
@@ -362,6 +371,25 @@ class MetricsExporter:
         detailed_timings = metrics_data.get("detailed_timings", {})
         scenario_info = metrics_data.get("scenario_info", {})
 
+        # Fetch per-iteration blockchain-service process metrics (if enabled)
+        bc_sys_for_iteration: Dict[str, Any] = {}
+        if scenario_info.get("blockchain_enabled") and httpx is not None:
+            try:
+                from shared.config import settings
+                if getattr(settings, "blockchain_service_url", None):
+                    bc_url = settings.blockchain_service_url.rstrip("/")
+                    with httpx.Client(timeout=5.0) as client:
+                        resp = client.get(f"{bc_url}/api/v1/system-metrics")
+                        resp.raise_for_status()
+                        bc_sys_for_iteration = resp.json()
+                        metrics_collector.record_blockchain_service_metrics(
+                            iteration, bc_sys_for_iteration
+                        )
+            except Exception as e:
+                logger.debug(
+                    "Could not fetch per-iteration blockchain-service metrics: %s", e
+                )
+
         # One row per FL iteration: use a single canonical timing index per iteration.
         # Prefer the index where model_validation (or fedavg, blockchain_register) has this
         # iteration — i.e. the main completion of the iteration, not rollback-related ops.
@@ -372,9 +400,11 @@ class MetricsExporter:
             logger.debug(f"No timing index found for iteration {iteration}")
             return
 
-        # Build exactly one row for this iteration
+        # Build exactly one row for this iteration (exclude blockchain_enabled from export)
         base_row: Dict[str, Any] = {}
         for key, value in scenario_info.items():
+            if key == "blockchain_enabled":
+                continue
             base_row[f"scenario_{key}"] = self._format_value(value)
 
         system_summary_for_row = iteration_system_summary
@@ -416,6 +446,11 @@ class MetricsExporter:
             detailed_timings, iteration
         ).items():
             row[f"timing_{op}_total_duration"] = self._format_value(total_sec)
+        # Per-iteration blockchain-service process metrics
+        for key, value in self._flatten_dict_with_prefix(
+            bc_sys_for_iteration, "blockchain_service_"
+        ).items():
+            row[key] = self._format_value(value)
         iteration_rows = [row]
 
         # Append rows to CSV
@@ -559,14 +594,17 @@ class MetricsExporter:
         # Create base row with scenario info only (no op_*)
         base_row = {}
 
-        # Add scenario info
+        # Add scenario info (exclude blockchain_enabled from export)
         for key, value in scenario_info.items():
+            if key == "blockchain_enabled":
+                continue
             base_row[f"scenario_{key}"] = self._format_value(value)
 
-        # Add blockchain-service process metrics (snapshot at export time; one per run)
-        bc_sys = metrics_data.get("blockchain_service_system_metrics", {})
-        for key, value in self._flatten_dict_with_prefix(bc_sys, "blockchain_service_").items():
-            base_row[key] = self._format_value(value)
+        # Per-iteration blockchain-service metrics (fallback: run-level snapshot)
+        iteration_bc_metrics = metrics_data.get(
+            "iteration_blockchain_service_metrics", {}
+        )
+        run_level_bc_sys = metrics_data.get("blockchain_service_system_metrics", {})
 
         # Create one row per FL iteration (same as incremental append)
         if detailed_timings:
@@ -598,7 +636,18 @@ class MetricsExporter:
                 row = base_row.copy()
                 row["timing_sample_index"] = self._format_value(i)
 
+                # Per-iteration blockchain-service metrics (fallback to run-level)
                 iteration_key = int(iteration)
+                bc_sys = (
+                    iteration_bc_metrics.get(iteration_key)
+                    or iteration_bc_metrics.get(str(iteration_key))
+                    or run_level_bc_sys
+                )
+                for key, value in self._flatten_dict_with_prefix(
+                    bc_sys, "blockchain_service_"
+                ).items():
+                    row[key] = self._format_value(value)
+
                 per_iter_summary = iteration_system_metrics.get(
                     iteration_key
                 ) or iteration_system_metrics.get(str(iteration_key))
@@ -641,6 +690,10 @@ class MetricsExporter:
         else:
             # No detailed timings, just add summary row with global system metrics
             row = base_row.copy()
+            for key, value in self._flatten_dict_with_prefix(
+                run_level_bc_sys, "blockchain_service_"
+            ).items():
+                row[key] = self._format_value(value)
             system_summary = system_metrics
             for key, value in system_summary.items():
                 if isinstance(value, dict):

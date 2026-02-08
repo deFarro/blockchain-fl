@@ -157,19 +157,22 @@ The service will run on `http://localhost:8080` by default.
 
 The blockchain service is a Go microservice that handles all Hyperledger Fabric operations. It provides a REST API for blockchain operations and can operate in two modes:
 
-1. **Development Mode (Default)**: Uses in-memory storage - **No blockchain setup required!** This is the default mode and works out of the box. Perfect for development, testing, and research projects.
+1. **Development Mode (Default)**: Uses a **local hash-linked blockchain** (chain-only storage in process). No Fabric network required. Model versions and rollback events are stored as blocks on this chain. **No blockchain setup required!** Perfect for development, testing, and research projects.
 
 2. **Blockchain Mode (Optional)**: Connected to a **local** Hyperledger Fabric network that you run on your own machine. This is completely local - you don't register with any external network. The Fabric network runs in Docker containers on your local machine, just like RabbitMQ and IPFS.
 
-**Important:** For most use cases (development, testing, research), you can use the default development mode. The blockchain service will automatically use in-memory storage and work perfectly fine without any blockchain setup.
+**Important:** For most use cases (development, testing, research), you can use the default development mode. The blockchain service will use the local chain and work without any Fabric setup. To verify the chain: `GET http://localhost:8080/api/v1/chain` returns `mode`, `length`, and `valid`.
 
 #### API Endpoints
 
 - `GET /health` - Health check
+- `GET /api/v1/chain` - Chain info (dev mode: `mode=local_chain`, `length`, `valid`)
 - `POST /api/v1/model/register` - Register model version
 - `POST /api/v1/model/validate` - Record validation results
 - `POST /api/v1/model/rollback` - Record rollback event
-- `GET /api/v1/model/provenance/{version_id}` - Get provenance chain
+- `GET /api/v1/model/rollback/latest` - Get most recent rollback event
+- `GET /api/v1/model/provenance/{version_id}` - Get provenance for a version
+- `GET /api/v1/model/list` - List all model versions
 
 #### Blockchain Service Configuration
 
