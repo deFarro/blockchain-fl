@@ -1,6 +1,6 @@
 # Blockchain-Enabled Learning Systems for Verifiable Model Provenance
 
-> **MSc Thesis Project** > **Topic:** Blockchain-Enabled Learning Systems for Verifiable Model Provenance, Rollback, and Regulatory Auditability.
+> **MSc Thesis Project** — **Topic:** Blockchain-Enabled Learning Systems for Verifiable Model Provenance, Rollback, and Regulatory Auditability.
 
 ## Quick Start
 
@@ -9,7 +9,15 @@
 3. **Access Dashboard:** Open `http://localhost:8000/`
 4. **Start Training:** Click "Start Training" in the dashboard
 
-For detailed instructions, see [SETUP.md](SETUP.md) and [RUNNING.md](RUNNING.md).
+For detailed instructions, see [SETUP.md](SETUP.md).
+
+## Contents
+
+- [Project Overview](#project-overview) · [Research Questions](#research-questions)
+- [System Architecture](#system-architecture): [Components](#system-components), [Data Flow](#data-flow-architecture), [Processing Pipeline](#processing-pipeline), [Rollback](#rollback-strategy), [Manual Rollback](#manual-rollback), [Post-Rollback](#post-rollback-workflow), [Training Completion](#training-completion-criteria), [Regression Diagnosis](#regression-diagnosis)
+- [Data Structures](#data-structures) · [Language (Go vs Python)](#language-distribution-go-vs-python) · [Smart Contract](#smart-contract-design-hyperledger-fabric) · [IPFS](#ipfs-storage) · [Diff Storage](#diff-storage-encrypted-diff--blockchain-hash)
+- [Dataset Separation](#dataset-separation-training-vs-test) · [Dataset Splitting](#dataset-splitting-eg-mnist) · [Security](#security-considerations) · [Queue](#queue-design)
+- [Performance](#performance-rq3) · [Tech Stack & Structure](#technology-stack--project-structure) · [Research Questions](#addressing-research-questions) · [Architecture Notes](#architecture-notes-and-implementation-priorities) · [Testing](#testing-strategy)
 
 ## Project Overview
 
@@ -20,27 +28,21 @@ The project aims to address the opacity of AI development by designing a blockch
 ### Key Capabilities
 
 - **Immutable Audit Trails:** Records training events and metadata on a permissioned blockchain
-- **Model Rollback:** Enables the restoration of previous model states to mitigate poisoning attacks or errors.
-- **Hybrid Storage:** Utilises a "Selective Decentralisation" architecture where critical metadata is stored on-chain, while heavy model artefacts are stored off-chain.
-- **Privacy-Preserving:** Integrates with Federated Learning workflows to simulate training without exposing raw local data.
-
----
+- **Model Rollback:** Enables restoration of previous model states to mitigate poisoning attacks or errors
+- **Hybrid Storage:** "Selective Decentralisation" — critical metadata on-chain, heavy model artefacts off-chain (IPFS)
+- **Privacy-Preserving:** Integrates with Federated Learning; clients train on local data only
 
 ## Research Questions
 
-This prototype is designed specifically to answer the following research questions defined in the thesis proposal:
-
-1.  **RQ1 (Architecture):** How can blockchain technology be integrated into learning systems to enable verifiable model provenance, rollback, and auditability while maintaining efficiency?
-2.  **RQ2 (Trust & Auditability):** To what extent can blockchain-based provenance tracking improve the traceability and reproducibility of ML models compared with conventional systems?
-3.  **RQ3 (Performance):** What are the performance implications (latency, overhead, storage) of incorporating blockchain into the training process?
+1. **RQ1 (Architecture):** How can blockchain be integrated into learning systems to enable verifiable model provenance, rollback, and auditability while maintaining efficiency?
+2. **RQ2 (Trust & Auditability):** To what extent can blockchain-based provenance improve traceability and reproducibility of ML models vs conventional systems?
+3. **RQ3 (Performance):** What are the performance implications (latency, overhead, storage) of incorporating blockchain into the training process?
 
 ---
 
-# System Architecture Design
+# System Architecture
 
-## Overview
-
-This document outlines the detailed architecture for the blockchain-enabled federated learning system, addressing the research questions defined in the proposal. It consolidates all design decisions, language choices, dataset separation, and implementation details.
+This section outlines the architecture for the blockchain-enabled federated learning system, including design decisions, component roles, data flow, and implementation notes.
 
 ## System Components
 
@@ -55,18 +57,18 @@ This document outlines the detailed architecture for the blockchain-enabled fede
 - Task queue management
 - UI/API for manual intervention
 
-**Important:** Main service is the **only** component with access to test/validation datasets. Clients only have training datasets.
+**Important:** Main service is the only component with access to test/validation datasets. Clients only have training datasets.
 
 **Components:**
 
-- **Queue Manager**: Manages task distribution (RabbitMQ)
-- **Aggregation Worker**: Combines client updates using federated averaging
-- **Blockchain Client**: HTTP client that calls blockchain-service API
-- **Storage Worker**: Handles encryption/decryption and IPFS storage
-- **Validation Worker**: Runs test datasets and evaluates model performance
-- **Rollback Worker**: Manages model state restoration
-- **API Server**: REST API for manual task creation, monitoring, and manual rollback
-- **Web UI**: Dashboard for monitoring, manual intervention, and rollback management
+- **Queue Manager:** Manages task distribution (RabbitMQ)
+- **Aggregation Worker:** Combines client updates using federated averaging
+- **Blockchain Client:** HTTP client that calls blockchain-service API
+- **Storage Worker:** Handles encryption/decryption and IPFS storage
+- **Validation Worker:** Runs test datasets and evaluates model performance
+- **Rollback Worker:** Manages model state restoration
+- **API Server:** REST API for manual task creation, monitoring, and manual rollback
+- **Web UI:** Dashboard for monitoring, manual intervention, and rollback management
 
 ### 2. Blockchain Service (Go Microservice)
 
@@ -78,20 +80,15 @@ This document outlines the detailed architecture for the blockchain-enabled fede
 - Provenance chain management
 - Validation and rollback event recording
 
-**Architecture:**
-
-- Separate Go microservice (isolated from Python dependencies)
-- REST API for blockchain operations
-- Uses official Hyperledger Fabric Go SDK
-- Can be developed and deployed independently
+**Architecture:** Separate Go microservice (isolated from Python); REST API for blockchain operations; can be developed and deployed independently.
 
 **API Endpoints:**
 
-- `POST /api/v1/model/register` - Register model version
-- `POST /api/v1/model/validate` - Record validation results
-- `POST /api/v1/model/rollback` - Record rollback event
-- `GET /api/v1/model/provenance/{version_id}` - Get provenance chain
-- `GET /health` - Health check
+- `POST /api/v1/model/register` — Register model version
+- `POST /api/v1/model/validate` — Record validation results
+- `POST /api/v1/model/rollback` — Record rollback event
+- `GET /api/v1/model/provenance/{version_id}` — Get provenance chain
+- `GET /health` — Health check
 
 ### 3. Client Service (Training Service)
 
@@ -102,1327 +99,458 @@ This document outlines the detailed architecture for the blockchain-enabled fede
 - Task consumption from queue
 - Scalable deployment (multiple instances with different training datasets)
 
-**Important:** Clients **never** see test/validation datasets. They only train on their local training data.
+**Important:** Clients never see test/validation datasets; they only train on their local training data.
 
 **Components:**
 
-- **Training Engine**: PyTorch model training
-- **Queue Consumer**: Reads training tasks from queue
-- **Update Publisher**: Publishes weight updates to queue
-- **Config Manager**: Manages dataset paths, model architecture, hyperparameters
+- **Training Engine:** PyTorch model training
+- **Queue Consumer:** Reads training tasks from queue
+- **Update Publisher:** Publishes weight updates to queue
+- **Config Manager:** Manages dataset paths, model architecture, hyperparameters
 
 ## Data Flow Architecture
 
 ### Training Iteration Flow
 
-Clients send weight updates (encrypted diffs) to a queue, which feeds into the Aggregation Worker. Multiple clients can contribute updates simultaneously.
+Clients send weight updates (encrypted diffs) to a queue. Multiple clients can contribute simultaneously. The pipeline runs: aggregation → blockchain → storage → validation → decision.
+
+**Iteration coordination:** Clients are passive (train only when they receive TRAIN tasks). Main service publishes TRAIN tasks only after validation passes. Late updates for past iterations are rejected (logged and ignored).
 
 ### Processing Pipeline
 
-**Step 1: Aggregation Worker**
+**Step 1: Aggregation Worker** — Reads multiple client updates from queue; applies FedAvg aggregation; publishes aggregated update to queue.
 
-- Reads multiple client updates from queue
-- Applies FedAvg aggregation
-- Publishes aggregated update to queue
+**Step 2: Blockchain Worker** — Reads aggregated update; computes hash of encrypted diff; calls blockchain-service API to create blockchain transaction; blockchain service uses Fabric Go SDK to invoke chaincode; stores version hash, parent hash, timestamp, metadata on-chain; publishes task with blockchain hash to queue.
 
-**Step 2: Blockchain Worker**
+**Step 3: Storage Worker** — Reads task with blockchain hash; encrypts aggregated diff (AES-256); stores encrypted diff on IPFS (gets CID); verifies hash of encrypted diff matches blockchain hash; pins CID for persistence; publishes task with IPFS CID to queue.
 
-- Reads aggregated update
-- Computes hash of encrypted diff
-- Calls blockchain-service API to create blockchain transaction
-- Blockchain service uses Fabric Go SDK to invoke chaincode
-- Stores version hash, parent hash, timestamp, metadata on-chain
-- Publishes task with blockchain hash to queue
+**Step 4: Validation Worker** — Reads task with IPFS CID; retrieves encrypted diff from IPFS; decrypts and loads model weights; applies diff to previous weights; runs test dataset validation (test data stored only in main service); calls blockchain-service API to record validation results on blockchain; publishes validation result to queue.
 
-**Step 3: Storage Worker**
+**Step 5: Decision Logic** — Reads validation result; evaluates model performance using rollback strategy. If rollback needed: rollback entire iteration or run regression diagnosis to exclude problematic client(s). If PASS: checks if training is complete (accuracy threshold, max iterations, manual trigger, etc.); if not complete, publishes TRAIN tasks for next iteration (with new aggregated weights CID); if complete, publishes TRAINING_COMPLETE with final model information. Updates model registry.
 
-- Reads task with blockchain hash
-- Encrypts aggregated diff (AES-256)
-- Stores encrypted diff on IPFS (gets CID)
-- Verifies hash of encrypted diff matches blockchain hash
-- Pins CID to ensure persistence
-- Publishes task with IPFS CID to queue
-
-**Step 4: Validation Worker**
-
-- Reads task with IPFS CID
-- Retrieves encrypted diff from IPFS
-- Decrypts and loads model weights
-- Applies diff to previous weights
-- Runs test dataset validation (test data stored only in main service)
-- Calls blockchain-service API to record validation results on blockchain
-- Publishes validation result to queue
-
-**Step 5: Main Service Decision Logic**
-
-- Reads validation result
-- Evaluates model performance using rollback strategy (see Rollback Strategy section below)
-- **Iteration Coordination**: Main service controls when clients start next iteration
-  - Clients are passive: They only train when they receive TRAIN tasks
-  - Main service is active: Publishes TRAIN tasks only after validation passes
-  - **Late Updates**: Updates for past iterations are rejected (logged and ignored)
-- If rollback needed:
-  - Option 1: Rollback entire iteration (standard approach)
-  - Option 2: Run regression diagnosis to identify problematic client(s) and exclude them (see Regression Diagnosis section)
-- If PASS: Checks if training is complete (based on criteria like accuracy threshold, max iterations, or manual trigger)
-  - If training continues: Publishes TRAIN tasks for **next iteration** (with new aggregated weights CID)
-  - If training complete: Publishes TRAINING_COMPLETE task with final model information
-- Updates model registry
+**Step 6: Training Completion Task** — Contains final model version ID, final accuracy and metrics, IPFS CID of final weights, training summary (iterations, clients, duration), metadata. Consumed by API/UI; final state recorded on blockchain.
 
 ### Rollback Strategy
 
-The main service determines if a diff is good by evaluating model performance on the test dataset. The primary metric is accuracy, with support for other metrics (loss, precision, recall, etc.).
+Validation uses test-set accuracy (and optionally loss, precision, recall). **Tolerance + patience:** allow small accuracy drops (e.g. 0.5–1%) and a number of consecutive “bad” iterations (e.g. 3–5) before rollback. **Best checkpoint** is the last version with best accuracy; rollback targets this. **Scenarios:** Immediate rollback if drop > tolerance; patience-based if below best for N iterations; no rollback if acceptable (reset patience, update best). **Rollback depth:** To last safe checkpoint; intermediate versions discarded. **Validation criteria (summary):** (1) Accuracy comparison with previous best. (2) Tolerance threshold for small drops. (3) Patience counter for consecutive below-best iterations. (4) Best checkpoint as rollback target.
 
-**Validation Criteria:**
+**Configuration parameters:** `accuracy_tolerance` (max allowed accuracy drop before concern), `patience_threshold` (consecutive bad iterations before rollback), `min_accuracy_threshold` (absolute minimum for immediate rollback), `metrics_to_track` (e.g. accuracy, loss, precision, recall).
 
-**1. Accuracy Comparison:**
-
-- Compare current model accuracy with previous best accuracy
-- Track accuracy history for all model versions
-- Accuracy is the primary metric for rollback decisions
-
-**2. Tolerance and Patience Mechanism:**
-
-The system uses a tolerance-based approach with patience to allow temporary accuracy drops:
-
-- **Tolerance Threshold:** Allow accuracy to drop by a small amount (e.g., 0.5-1%) before considering rollback
-
-  - Example: If best accuracy is 95%, allow down to 94% before triggering concern
-  - Configurable per deployment
-
-- **Patience Counter:** Track consecutive iterations where accuracy is below the best
-
-  - Start with patience = 0 when accuracy drops below best
-  - Increment patience for each consecutive bad iteration
-  - If patience exceeds threshold (e.g., 3-5 iterations), trigger rollback
-
-- **Best Checkpoint Tracking:** Maintain reference to the last "safe" or "best" model version
-  - Store version ID of model with best accuracy
-  - This becomes the rollback target if patience is exceeded
-
-**3. Rollback Decision Logic:**
-
-**Scenario 1: Immediate Rollback (Severe Drop)**
-
-- If accuracy drops by more than tolerance threshold (e.g., >2% drop)
-- Rollback immediately to previous best checkpoint
-
-**Scenario 2: Patience-Based Rollback (Gradual Degradation)**
-
-- If accuracy drops within tolerance but stays below best for N consecutive iterations
-- Rollback to last best checkpoint after patience threshold is reached
-- Allows model to recover from temporary dips (common in training)
-
-**Scenario 3: No Rollback (Acceptable Performance)**
-
-- If accuracy improves or stays within acceptable range
-- Reset patience counter
-- Update best checkpoint if new best accuracy achieved
-- Continue training
-
-**4. Rollback Depth:**
-
-When rollback is triggered:
-
-- Rollback to the last "safe" checkpoint (model version with best accuracy)
-- This may be several iterations back if patience allowed multiple bad iterations
-- All intermediate versions between best and current are discarded
-- Training resumes from the best checkpoint
-
-**5. Configuration Parameters:**
-
-- `accuracy_tolerance`: Maximum allowed accuracy drop before concern (default: 0.5%)
-- `patience_threshold`: Number of consecutive bad iterations before rollback (default: 3)
-- `min_accuracy_threshold`: Absolute minimum accuracy below which immediate rollback (default: configurable)
-- `metrics_to_track`: List of metrics to evaluate (accuracy, loss, precision, recall, etc.)
-
-**6. Example Flow:**
+**Example flow:**
 
 ```
 Iteration 1: Accuracy = 90% → Best = 90%, Patience = 0, Checkpoint = v1.0
 Iteration 2: Accuracy = 91% → Best = 91%, Patience = 0, Checkpoint = v1.1 (new best)
-Iteration 3: Accuracy = 90.5% → Best = 91%, Patience = 1 (within tolerance, but below best)
-Iteration 4: Accuracy = 90.3% → Best = 91%, Patience = 2 (still below best)
+Iteration 3: Accuracy = 90.5% → Best = 91%, Patience = 1 (within tolerance, below best)
+Iteration 4: Accuracy = 90.3% → Best = 91%, Patience = 2
 Iteration 5: Accuracy = 90.2% → Best = 91%, Patience = 3 (threshold reached)
 → ROLLBACK to v1.1 (last best checkpoint)
 ```
 
-**7. Benefits:**
-
-- Prevents model degradation from accumulating over multiple iterations
-- Allows temporary accuracy dips (common in training) without premature rollback
-- Maintains best model state automatically
-- Configurable thresholds for different use cases
-- Supports research on rollback strategies (RQ1)
+**Benefits:** Prevents model degradation from accumulating; allows temporary accuracy dips without premature rollback; maintains best model state; configurable for different use cases.
 
 ### Manual Rollback
 
-In addition to automatic rollback based on accuracy metrics, the system supports manual rollback for security and operational reasons.
+Use cases: suspected poisoning, security incidents, data quality issues, operational errors, research. **Access:** API `POST /api/v1/models/{version_id}/rollback` (API key) or Web UI (version history, select target, reason). **Request:** `target_version_id`, `reason`, `triggered_by`, optional `priority`. **Execution:** Manual rollback creates ROLLBACK task. Rollback worker: (1) Validates target version exists and is accessible. (2) Retrieves target version weights from IPFS. (3) Updates blockchain via RollbackModel (from/to version, reason, triggered_by, type "manual"). (4) Records reason, triggered_by, timestamp on-chain. (5) Updates current model pointer to target version. (6) Publishes new TRAIN task to resume from rolled-back state. All actions logged on blockchain. **Version selection (UI):** Dashboard shows model version history (version ID, timestamp, accuracy, validation status, client IDs, IPFS CID); user selects target version and enters reason; system validates version is accessible.
 
-**Use Cases for Manual Rollback:**
+**Blockchain recording:** RollbackModel records from_version_id, to_version_id, reason, triggered_by, timestamp, type "manual". Manual rollback can be triggered anytime; takes precedence over automatic; after it, automatic logic resets. **Example scenarios:** Suspected poisoning → roll back to version before suspicious update. Security incident → roll back to last known good state.
 
-- **Model Poisoning Detection:** Suspected malicious updates from clients
-- **Security Incidents:** Detected attacks or unauthorized changes
-- **Data Quality Issues:** Discovery of corrupted or incorrect training data
-- **Operational Errors:** Human error in configuration or deployment
-- **Research Requirements:** Intentional rollback for experimentation
+**Benefits of manual rollback:** Rapid response to poisoning or attacks; human oversight; complete audit trail; operational flexibility; supports regulatory compliance.
 
-**Manual Rollback Process:**
-
-**1. Access via API or UI:**
-
-- **API Endpoint:** POST `/api/v1/models/{version_id}/rollback`
-
-  - Requires authentication (API key)
-  - Accepts target version ID and reason
-  - Returns rollback task ID
-
-- **Web UI:** Dashboard with rollback interface
-  - Display model version history with accuracy metrics
-  - Select target version to rollback to
-  - Enter reason for rollback
-  - Submit rollback request
-
-**2. Rollback Request Parameters:**
-
-- `target_version_id`: Version to rollback to (must be a valid previous version)
-- `reason`: Human-readable reason for rollback (e.g., "Suspected model poisoning", "Security incident", "Manual intervention")
-- `triggered_by`: User ID or identifier of person initiating rollback
-- `priority`: Optional priority level (normal, high, urgent)
-
-**3. Authorization and Security:**
-
-- Only authorized users can trigger manual rollback
-- API key authentication required for API access
-- Role-based access control (admin, operator roles)
-- All manual rollback actions are logged and recorded on blockchain
-- Audit trail includes who, when, why, and to which version
-
-**4. Rollback Execution:**
-
-- Manual rollback request creates a ROLLBACK task in queue
-- Rollback worker processes the task:
-  1. Validates target version exists and is accessible
-  2. Retrieves target version weights from IPFS
-  3. Updates blockchain with rollback event (via RollbackModel smart contract function)
-  4. Records reason, triggered_by, and timestamp on-chain
-  5. Updates current model pointer to target version
-  6. Publishes new training task to resume from rolled-back state
-
-**5. Blockchain Recording:**
-
-- RollbackModel smart contract function records:
-  - From Version ID (current version)
-  - To Version ID (target version)
-  - Reason (from manual request)
-  - Triggered By (user identifier)
-  - Timestamp
-  - Type: "manual" (distinguished from automatic rollback)
-
-**6. Integration with Automatic Rollback:**
-
-- Manual rollback can be triggered at any time, even during automatic rollback evaluation
-- Manual rollback takes precedence over automatic rollback
-- After manual rollback, automatic rollback logic resets (patience counter, best checkpoint)
-- System resumes normal training from rolled-back state
-
-**7. Version Selection Interface:**
-
-- UI displays model version history with:
-  - Version ID
-  - Timestamp
-  - Accuracy metrics
-  - Validation status
-  - Client IDs that contributed
-  - IPFS CID for weights
-- User can select any previous version as rollback target
-- System validates version is accessible and valid
-
-**8. Example Manual Rollback Scenarios:**
-
-**Scenario 1: Suspected Poisoning**
-
-- Operator notices unusual behavior in model predictions
-- Reviews recent client contributions
-- Identifies suspicious client update
-- Manually rolls back to version before suspicious update
-- Reason: "Suspected model poisoning from client_3"
-
-**Scenario 2: Security Incident**
-
-- Security team detects unauthorized access
-- Manually rolls back to last known good state
-- Reason: "Security incident - unauthorized access detected"
-
-**Scenario 3: Data Quality Issue**
-
-- Discovery that training data was corrupted
-- Rollback to version before corrupted data was used
-- Reason: "Data quality issue - corrupted training data"
-
-**9. Benefits:**
-
-- Enables rapid response to security threats (model poisoning, attacks)
-- Provides human oversight and intervention capability
-- Maintains complete audit trail of all rollback actions
-- Supports operational flexibility and research needs
-- Critical for production deployments and regulatory compliance
+Manual takes precedence over automatic; after it, patience and best checkpoint reset.
 
 ### Post-Rollback Workflow
 
-When a rollback occurs (automatic or manual), the system must ensure training continues correctly from the rolled-back state.
+(1) Rollback worker retrieves target weights from IPFS, updates blockchain (current pointer = rolled-back version), records rollback event, publishes ROLLBACK to queue. (2) All clients receive ROLLBACK task (target version ID, IPFS CID); they download weights, replace local state, discard changes after cutoff, acknowledge. (3) Main service publishes new TRAIN with rolled-back weights CID; all clients continue from same state (including those who contributed after cutoff — their contributions remain on-chain for audit but are excluded from current model). (4) Best checkpoint and patience reset.
 
-**1. Rollback Execution:**
+**Handling clients that contributed after cutoff:** All clients (including those who contributed updates after the rolled-back version) receive the same ROLLBACK task, load rolled-back weights from IPFS, and discard local state after the cutoff. Their previous contributions remain on blockchain for audit but are excluded from the current model. No special treatment; all clients resume from the same state.
 
-- Rollback worker completes rollback:
-  1. Retrieves target version weights from IPFS
-  2. Updates blockchain state (current model pointer = rolled-back version)
-  3. Records rollback event on blockchain
-  4. Publishes rollback notification to queue
-
-**2. Client Notification and Weight Update:**
-
-- **All clients receive notification** about rollback:
-
-  - Rollback event published to queue as ROLLBACK task
-  - Contains target version ID and IPFS CID of rolled-back weights
-  - All clients (including those that contributed after cutoff) must update
-
-- **Client Response:**
-  - Clients read ROLLBACK task from queue
-  - Download rolled-back weights from IPFS using provided CID
-  - Replace current local weights with rolled-back weights
-  - Discard any local changes made after the cutoff point
-  - Acknowledge rollback completion
-
-**3. Training Continuation:**
-
-- After rollback, system publishes new TRAIN task to queue:
-
-  - Task includes IPFS CID of rolled-back weights
-  - All clients receive the same task
-  - Clients load rolled-back weights and continue training from that point
-  - Ensures all clients start from the same state
-
-- **Synchronization:**
-  - All clients must acknowledge rollback before new training round begins
-  - Main service waits for all active clients to confirm rollback
-  - Prevents clients from using outdated weights
-
-**4. Handling Clients That Contributed After Cutoff:**
-
-- **Clients that contributed updates after the rolled-back version:**
-
-  - Receive rollback notification
-  - Must discard their local model state (if they have one)
-  - Must load rolled-back weights from IPFS
-  - Continue training from rolled-back state
-  - Their previous contributions are effectively discarded (but remain on blockchain for audit)
-
-- **No Special Treatment:**
-  - All clients treated equally after rollback
-  - No distinction between clients that contributed before/after cutoff
-  - Ensures consistent state across all clients
-
-**5. Rollback State Reset:**
-
-- After rollback, automatic rollback logic resets:
-  - Best checkpoint updated to rolled-back version
-  - Patience counter reset to 0
-  - Accuracy tracking restarts from rolled-back version
-  - Training continues with fresh rollback state
+**Rollback state reset:** After rollback, automatic rollback logic resets: best checkpoint is updated to the rolled-back version, patience counter resets to 0, accuracy tracking restarts from the rolled-back version, training continues with fresh rollback state.
 
 ### Training Completion Criteria
 
-The system determines when training is complete based on multiple criteria. Training can be considered ready when any of these conditions are met:
+Training completes when **any** of: (1) **Accuracy threshold** reached (e.g. 95%). (2) **Convergence** — no improvement for N iterations (e.g. 10). (3) **Max iterations** (e.g. 100). (4) **Max rollbacks** exceeded — best model marked final. (5) **Manual trigger** via API/UI. **Overtraining:** Track validation vs training accuracy; early stopping if validation plateaus or train/val gap exceeds threshold. **On completion:** TRAINING_COMPLETE published (final version ID, metrics, IPFS CID, summary, completion reason); final state on blockchain; no new TRAIN tasks. **Configuration parameters:** `target_accuracy` (minimum accuracy to achieve), `convergence_patience` (iterations without improvement before convergence), `max_iterations` (maximum training rounds), `max_rollbacks` (maximum rollbacks before stopping), `overtraining_threshold` (validation accuracy gap threshold), `early_stopping_enabled`.
 
-**1. Accuracy Threshold Reached:**
+**When any completion criterion is met:** (1) Decision worker detects completion. (2) Publishes TRAINING_COMPLETE to queue (final version ID, accuracy/metrics, IPFS CID, summary, completion reason). (3) Final state recorded on blockchain. (4) API/UI notified that model is ready. (5) Training stops; no new TRAIN tasks published.
 
-- Target accuracy achieved (e.g., 95% accuracy)
-- Configurable per deployment
-- Once reached, training stops and model is marked as ready
-- Final model version recorded on blockchain
+**Example completion scenarios:** (1) Accuracy threshold: target 95% reached → "Accuracy threshold reached". (2) Convergence: no improvement for 10 iterations → "Convergence detected". (3) Max rollbacks: 5 → "Rollback limit reached - investigation recommended". (4) Max iterations: 100 → "Maximum iterations reached".
 
-**2. Convergence Detection:**
-
-- Model accuracy has not improved for N consecutive iterations (e.g., 10 iterations)
-- Indicates model has reached its maximum performance
-- Prevents unnecessary training iterations
-- Configurable convergence threshold
-
-**3. Maximum Iterations Reached:**
-
-- Predefined maximum number of training rounds completed
-- Prevents infinite training
-- Configurable limit (e.g., 100 rounds)
-- Model marked as ready even if accuracy threshold not reached
-
-**4. Rollback Limit Reached:**
-
-- Maximum number of rollbacks exceeded (e.g., 5 rollbacks)
-- Indicates model cannot be improved further
-- Clients may be contributing conflicting updates
-- Training stops and current best model is marked as final
-- Can indicate need for investigation (data quality, client issues)
+**Benefits:** Prevents infinite training; ensures model reaches acceptable performance or stops when not improving; clear completion criteria for research; manual trigger for operational needs; overtraining prevention via early stopping.
 
 ### Regression Diagnosis
 
-When a model regression is detected (accuracy drops), the system can diagnose which client(s) caused the regression by testing each client's diff individually.
+When regression is detected, the system can test each client’s diff individually on the previous model + test set to identify which client(s) caused the drop. (1) Normal aggregation first. (2) For each contributing client, load previous weights, apply only that client's diff, validate on test set. (3) Add identified clients to `excluded_clients` (runtime); future aggregations filter them out. **Example:** Clients 1,2,3 → 95%→92%; test client 1 alone → 94.5%, client 2 → 94.8%, client 3 → 88% → exclude client 3.
 
-**How It Works:**
+**Key point:** Normal aggregation first includes all client diffs. When regression is detected, diagnosis runs and identifies which client(s) caused it; those clients are then excluded from future aggregations. Exclusion is applied automatically at rollback time; no configuration needed.
 
-1. **Normal Aggregation (First)**: Aggregate ALL client diffs using FedAvg (no filtering overhead)
-
-2. **If Regression Detected**: Run regression diagnosis:
-
-   - For each client that contributed to the problematic iteration:
-     - Load previous model weights (before problematic iteration)
-     - Apply **only this client's diff**
-     - Validate on test dataset
-     - Compare accuracy with baseline
-   - Identify which client(s) caused the regression
-
-3. **Exclude from Future Iterations**: When problematic clients are identified at rollback (by testing each client's diff individually):
-   - Their IDs are added to `excluded_clients` (runtime list, not from env)
-   - **Future aggregations** always filter out excluded clients
-   - Only non-excluded clients participate in future iterations
-   - No configuration needed: unreliable clients are identified at rollback time and excluded automatically
-
-**Key Point**: Exclusion is applied automatically after rollback when unreliable clients are identified. Normal aggregation includes all non-excluded clients.
-
-**Example:**
+**Example (code):**
 
 ```
 Iteration 24: Clients 1, 2, 3 → Regression detected (95% → 92%)
-
 Diagnosis:
   Test Client 1 diff alone → 94.5% (OK)
   Test Client 2 diff alone → 94.8% (OK)
   Test Client 3 diff alone → 88.0% (REGRESSION!)
-
 Result: Exclude Client 3 from future iterations
 ```
 
-**Configuration:**
-
-- Unreliable clients are identified at rollback time (each diff tested individually) and excluded automatically; no env vars required.
-
-**Limitations:**
-
-- Currently tests each client individually (future: test combinations)
-- Requires access to previous weights and test dataset
-- No automatic re-inclusion (manual re-enable required)
-
-See `docs/REGRESSION_DIAGNOSIS.md` for detailed documentation.
-
-**5. Manual Completion Trigger:**
-
-- Operator manually triggers training completion via API/UI
-- Useful for research, testing, or operational needs
-- Final model state recorded regardless of metrics
-
-**6. Overtraining Prevention:**
-
-- **Validation Accuracy Monitoring:**
-
-  - Track validation accuracy vs training iterations
-  - If validation accuracy plateaus or decreases while training continues, consider stopping
-  - Early stopping based on validation metrics
-
-- **Gap Detection:**
-
-  - Monitor gap between training accuracy and validation accuracy
-  - Large gap indicates overfitting
-  - Trigger early stopping if gap exceeds threshold
-
-- **Convergence Indicators:**
-  - Loss stops decreasing significantly
-  - Accuracy improvement per iteration becomes negligible
-  - Model performance stabilizes
-
-**7. Training Completion Process:**
-
-When any completion criterion is met:
-
-1. Decision worker detects completion condition
-2. Publishes TRAINING_COMPLETE task to queue
-3. Task contains:
-   - Final model version ID
-   - Final accuracy and metrics
-   - IPFS CID of final model weights
-   - Training summary (iterations, clients, duration)
-   - Completion reason (which criterion was met)
-4. Final state recorded on blockchain
-5. API/UI notified that model is ready
-6. Training stops, no new training tasks published
-
-**8. Configuration Parameters:**
-
-- `target_accuracy`: Minimum accuracy to achieve (default: configurable)
-- `convergence_patience`: Iterations without improvement of at least `accuracy_tolerance` before convergence (default: 10)
-- `max_iterations`: Maximum training rounds (default: 100)
-- `max_rollbacks`: Maximum rollbacks before stopping (default: 5)
-- `overtraining_threshold`: Validation accuracy gap threshold (default: configurable)
-- `early_stopping_enabled`: Enable early stopping based on validation metrics (default: true)
-
-**9. Example Completion Scenarios:**
-
-**Scenario 1: Accuracy Threshold**
-
-- Training reaches 95% accuracy (target: 95%)
-- Training stops, model marked as ready
-- Completion reason: "Accuracy threshold reached"
-
-**Scenario 2: Convergence**
-
-- For 10 consecutive iterations, accuracy never improved by at least `accuracy_tolerance` (e.g. 0.5%) over the best
-- Training stops, model marked as ready
-- Completion reason: "Convergence detected"
-
-**Scenario 3: Rollback Limit**
-
-- 5 rollbacks occurred (max: 5)
-- Model cannot be improved further
-- Training stops, best model marked as final
-- Completion reason: "Rollback limit reached - investigation recommended"
-
-**Scenario 4: Maximum Iterations**
-
-- 100 training rounds completed (max: 100)
-- Training stops regardless of accuracy
-- Completion reason: "Maximum iterations reached"
-
-**10. Benefits:**
-
-- Prevents infinite training loops
-- Ensures model reaches acceptable performance
-- Detects when further training is not beneficial
-- Provides clear completion criteria for research
-- Supports operational needs with manual triggers
-- Prevents overtraining through early stopping
-
-**Step 6: Training Completion Task**
-
-- Contains final model information:
-  - Final model version ID
-  - Final accuracy and metrics
-  - IPFS CID of final model weights
-  - Training summary (total iterations, clients participated, training duration)
-  - Metadata (hyperparameters used, dataset information)
-- Can be consumed by API/UI to notify that model is ready
-- Final state recorded on blockchain
+**Limitations:** Currently tests each client individually (future: test combinations); requires previous weights and test dataset; no automatic re-inclusion (manual re-enable if needed). **Configuration:** Unreliable clients identified at rollback and excluded automatically; no env vars required. See `docs/REGRESSION_DIAGNOSIS.md`.
 
 ## Data Structures
 
 ### On-Chain Storage (Smart Contract State)
 
-ModelVersion structure includes: version_id (unique identifier), parent_version_id (previous version for lineage), timestamp (Unix timestamp), client_ids (which clients contributed), aggregated_hash (SHA-256 of aggregated weights), diff_hash (SHA-256 of encrypted diff), off_chain_location (IPFS CID), hyperparameters (training config as JSON), validation_status (pending/passed/failed), validation_metrics (accuracy, loss, etc.), and block_number (for audit trail).
+**ModelVersion:** version_id, parent_version_id, timestamp, client_ids, aggregated_hash (SHA-256 of aggregated weights), diff_hash (SHA-256 of encrypted diff), off_chain_location (IPFS CID), hyperparameters (JSON), validation_status (pending/passed/failed), validation_metrics (accuracy, loss, etc.), block_number.
+
+**Validation records:** Version ID, validator ID, passed status, metrics (JSON), test dataset hash, timestamp.
+
+**Rollback events:** From version ID, to version ID, reason, triggered_by (validator/user or "automatic"), timestamp, type ("automatic" or "manual").
+
+**Iteration:** The iteration number stored on-chain is the current training iteration when the version is stored; enables late-update rejection (update iteration < on-chain current iteration), iteration coordination across services, and replay prevention.
 
 ### Off-Chain Storage
 
-Encrypted diff format includes: encrypted_diff (AES-256 encrypted weight diff bytes), encryption_key_hash (hash of key for key management), compression (optional gzip), and format (serialization format: JSON).
-
-**Storage Location:** IPFS (InterPlanetary File System)
-
-- Content-addressed storage (CID-based)
-- Encrypted diffs stored on IPFS network
-- Can run local IPFS node for development
-- Provides decentralized, immutable storage
-- Files referenced by Content Identifier (CID)
-- Supports pinning to ensure data persistence
+**Encrypted diff format:** encrypted_diff (AES-256 encrypted weight diff bytes), encryption_key_hash (for key management), optional compression (gzip), format (serialization, e.g. JSON). **Storage location:** IPFS; content-addressed (CID); pin for persistence; files referenced by Content Identifier.
 
 ## Language Distribution: Go vs Python
 
-### What's Written in Go?
+### Go (Blockchain Service)
 
-**Blockchain Service** - A separate microservice that handles all Hyperledger Fabric operations.
+**Location:** `blockchain_service/`.
 
-**Location:** `blockchain_service/`
+**Why Go:** Hyperledger Fabric has an official, well-maintained Go SDK; avoids dependency conflicts with Python packages; clean separation of concerns (blockchain logic isolated); better performance for blockchain operations.
 
-**Why Go?**
+**What it does:** Provides REST API for blockchain operations; interacts with Hyperledger Fabric using the official Go SDK; implements RegisterModelUpdate, RecordValidation, RollbackModel, GetModelProvenance; manages Fabric network connections and transactions; can be developed and deployed independently.
 
-- Hyperledger Fabric has an official, well-maintained Go SDK
-- Avoids dependency conflicts with Python packages
-- Clean separation of concerns (blockchain logic isolated)
-- Better performance for blockchain operations
+**Architecture:** Runs as separate Docker container (port 8080); main service calls it via HTTP; chaincode in `blockchain_service/chaincode/model_provenance.go` (Go; runs in Fabric-managed container).
 
-**What it does:**
+### Python (Main and Client)
 
-- Provides REST API for blockchain operations
-- Interacts with Hyperledger Fabric using the official Go SDK
-- Implements blockchain operations: RegisterModelUpdate, RecordValidation, RollbackModel, GetModelProvenance
-- Manages Fabric network connections and transactions
-- Can be developed and deployed independently
+**Main service (~70%):** Workers (aggregation, storage, validation, rollback), FastAPI server, queue consumers/producers, blockchain HTTP client, IPFS, encryption, validation logic, Web UI backend.
 
-**Architecture:**
+**Client service (~20%):** Training engine (PyTorch), model definitions, queue consumers, weight computation.
 
-- Runs as a separate Docker container
-- Exposes HTTP REST API (port 8080)
-- Main service calls it via HTTP requests
-- Can be optionally disabled/mocked for development
+**Shared (~10%):** Task models, utils, config, dataset interfaces.
 
-**Hyperledger Fabric Chaincode:**
+### Communication
 
-- Chaincode (smart contract) is also written in Go
-- Location: `blockchain_service/chaincode/model_provenance.go`
-- Defines data structures and smart contract functions
-- Runs in a secure Docker container managed by Fabric
+Main service ↔ blockchain service: HTTP REST (e.g. httpx; no direct Fabric SDK in Python). Blockchain service ↔ Fabric: official Go SDK.
 
-### What's Written in Python?
+**Benefits of this architecture:** No dependency conflicts (Go service isolated); uses official, maintained Fabric SDK; clean separation of concerns; blockchain service can be developed and tested independently; main service stays focused on ML workloads.
 
-**Main Service** (~70% of codebase):
+## Smart Contract Design (Hyperledger Fabric)
 
-- All workers (aggregation, storage, validation, rollback)
-- API server (FastAPI)
-- Queue consumers/producers
-- Blockchain client (HTTP client that calls blockchain-service)
-- Storage management (IPFS)
-- Encryption/decryption
-- Validation logic
-- Web UI backend
+### Chaincode Functions
 
-**Client Service** (~20% of codebase):
+- **RegisterModelUpdate:** Records new model version with version_id, parent_version_id, aggregated hash, diff hash, metadata. Stores ModelVersion in blockchain state; creates immutable record.
+- **RecordValidation:** Records validation results (version_id, pass/fail status, metrics). Updates ValidationStatus; creates ValidationRecord.
+- **RollbackModel:** Executes rollback from one version to another with reason and triggered_by. Validates version exists; creates RollbackEvent; updates current model pointer.
+- **GetModelProvenance:** Queries complete lineage chain for a version_id. Returns all parent versions and validation history.
+- **VerifyIntegrity:** Verifies integrity by comparing provided hash with stored hash. Returns true if match, false otherwise.
 
-- Training engine
-- Model definitions
-- Queue consumers
-- Weight computation
+### What Is Stored On-Chain
 
-**Shared** (~10% of codebase):
+**Model version metadata:** version_id, parent_version_id, timestamp, iteration (current training iteration for coordination and late-update rejection), num_clients, client_ids, aggregated_hash, diff_hash, off_chain_location (IPFS CID), hyperparameters (JSON), validation_status, validation_metrics (JSON), block_number.
 
-- Task models
-- Utilities
-- Configuration management
-- Dataset interfaces
+**Validation records:** version_id, validator_id, passed status, metrics (JSON), test_dataset_hash, timestamp.
 
-### Communication Between Services
+**Rollback events:** from_version_id, to_version_id, reason, triggered_by, timestamp, type ("automatic" or "manual").
 
-**Python Main Service ↔ Go Blockchain Service:**
+**Not stored on-chain:** model weights, weight diffs, raw training data, full binaries (size and cost prohibitive).
 
-- Main service calls blockchain service via HTTP REST API
-- Uses `httpx` (async HTTP client, already included with FastAPI)
-- No direct Fabric SDK dependencies in Python
-- Clean microservices architecture
+### Benefits of Blockchain Here
 
-**Blockchain Service ↔ Hyperledger Fabric:**
+**Immutable audit trail (RQ2):** Every version permanently recorded; regulatory compliance (e.g. EU AI Act). **Provenance (RQ2):** Full lineage (v1→v2→v3→rollback to v2); reproducibility. **Integrity (RQ1):** Hash of encrypted diff on-chain; verify off-chain data untampered. **Decentralized trust (RQ1):** Multiple parties can verify; auditors need not trust central authority. **Automation (RQ1):** Rollback and validation rules in code; access control via permissions.
 
-- Blockchain service uses the official Hyperledger Fabric Go SDK
-- Handles all Fabric network connections, transactions, and chaincode invocations
-- Isolated from Python dependency conflicts
+## IPFS Storage
 
-**Benefits of This Architecture:**
+### Setup and Operations
 
-- No dependency conflicts (Go service is isolated)
-- Uses official, maintained Fabric SDK
-- Clean separation of concerns
-- Can develop/test blockchain service independently
-- Main service stays focused on ML workloads
+**Local IPFS:** Run `ipfs daemon`; API typically http://localhost:5001. **Storage operations:** (1) Encrypt diff (AES-256-GCM). (2) Upload encrypted diff to IPFS → get CID. (3) Pin CID for persistence. (4) Store CID in blockchain metadata. (5) Verify hash of encrypted diff matches blockchain hash.
 
-## Smart Contract Design
+**Retrieval operations:** (1) Get CID from blockchain metadata. (2) Retrieve encrypted diff from IPFS. (3) Verify integrity (hash comparison with on-chain hash). (4) Decrypt diff. (5) Apply to model weights.
 
-### Chaincode Functions (Hyperledger Fabric)
+Python uses HTTP API (e.g. httpx) to IPFS daemon (default http://localhost:5001).
 
-The smart contract implements the following functions:
+### Benefits
 
-**RegisterModelUpdate:** Records a new model version with version ID, parent version ID, aggregated hash, diff hash, and metadata. Stores ModelVersion in blockchain state and creates an immutable record.
+Content-addressed (CID = content hash); decentralized; immutable (new content = new CID); open source; local node for development.
 
-**RecordValidation:** Records validation results with version ID, pass/fail status, and metrics. Updates ValidationStatus and creates ValidationRecord.
+## Diff Storage: Encrypted Diff + Blockchain Hash
 
-**RollbackModel:** Executes rollback from one version to another with a reason. Validates version exists, creates RollbackEvent, and updates current model pointer.
+### Why Not JWT
 
-**GetModelProvenance:** Queries complete lineage chain for a version ID. Returns all parent versions and validation history.
-
-**VerifyIntegrity:** Verifies integrity by comparing provided hash with stored hash. Returns true if match, false otherwise.
-
-### What to Store On-Chain
-
-**Model Version Metadata (Critical for Provenance):**
-
-- Version ID (unique identifier)
-- Parent Version ID (previous version for lineage)
-- Timestamp (when created)
-- **Iteration (training iteration number - e.g., 1, 2, 3...) - This is the CURRENT iteration when stored**
-- Num Clients (number of clients that participated in aggregation)
-- Client IDs (list of client IDs that contributed to this version)
-- Aggregated Hash (SHA-256 of aggregated weights)
-- Diff Hash (SHA-256 of encrypted diff)
-- Off-Chain Location (IPFS CID)
-- Hyperparameters (JSON string of training config)
-- Validation Status (pending/passed/failed)
-- Validation Metrics (JSON string of metrics)
-- Block Number (for audit trail)
-
-**Note**: The iteration number stored on-chain represents the current/latest iteration. This allows:
-
-- Late update rejection (check if update iteration < on-chain current iteration)
-- Iteration coordination across services
-- Preventing replay attacks
-- Ensuring all services agree on the current iteration
-
-**Validation Records:**
-
-- Version ID, Validator ID, Passed status, Metrics (JSON: accuracy, loss, etc.), Test Dataset Hash, Timestamp
-
-**Rollback Events:**
-
-- From Version ID, To Version ID, Reason, Triggered By (Validator ID, user ID, or "automatic"), Timestamp, Rollback Type ("automatic" or "manual")
-
-### What NOT to Store On-Chain
-
-- Model weights (too large, expensive)
-- Weight diffs (even compressed, too large)
-- Raw training data (privacy + size)
-- Full model binaries (storage cost prohibitive)
-
-### Benefits of Blockchain in This Context
-
-**1. Immutable Audit Trail (Addresses RQ2):** Every model version is permanently recorded, cannot be deleted or modified retroactively, critical for regulatory compliance (EU AI Act).
-
-**2. Provenance Tracking (Addresses RQ2):** Complete lineage (v1 → v2 → v3 → rollback to v2), can query any version's history, enables reproducibility.
-
-**3. Integrity Verification (Addresses RQ1):** Hash of encrypted diff stored on-chain, can verify off-chain data hasn't been tampered with, detects storage corruption or malicious modification.
-
-**4. Decentralized Trust (Addresses RQ1):** No single point of failure, multiple parties can verify independently, auditors can query blockchain without trusting central authority.
-
-**5. Smart Contract Automation (Addresses RQ1):** Automated rollback logic, validation rules enforced by code, access control via permissions.
-
-## IPFS Storage Implementation
-
-### IPFS Setup
-
-**Local IPFS Node:**
-
-- Run IPFS daemon locally (command: ipfs daemon)
-- Default API endpoint: http://localhost:5001
-- Can connect to IPFS network or run in isolated mode
-
-**Storage Operations:**
-
-1. Encrypt diff (AES-256-GCM)
-2. Upload encrypted diff to IPFS → Get CID
-3. Pin CID to ensure persistence
-4. Store CID in blockchain metadata
-5. Verify hash of encrypted diff matches blockchain hash
-
-**Retrieval Operations:**
-
-1. Get CID from blockchain metadata
-2. Retrieve encrypted diff from IPFS using CID
-3. Verify integrity (hash comparison)
-4. Decrypt diff
-5. Apply to model weights
-
-**IPFS Libraries:**
-
-- Python: httpx (async HTTP client, already included with FastAPI)
-- Direct HTTP API calls to IPFS daemon using async/await
-
-### IPFS Benefits
-
-- Content-addressed: CID is hash of content (integrity built-in)
-- Decentralized: No single point of failure
-- Immutable: Content cannot be changed (new content = new CID)
-- Open source: No vendor lock-in
-- Local development: Can run IPFS node locally
-
-## Diff Storage: Encrypted Diff + Blockchain Hash Verification
-
-### Why Not JWT?
-
-JWT is not ideal because: JWTs are designed for authentication/authorization, not data storage; JWT payloads are base64-encoded (not encrypted) - anyone can read them; JWT size limits would be problematic for model weight diffs; JWT verification relies on signatures, not blockchain hashes.
+JWT is for auth; payloads are base64, not encrypted; size limits unsuitable for weight diffs; verification is signature-based, not blockchain-hash.
 
 ### Recommended Approach
 
-**Process:**
+**Process:** Client computes weight diff → encrypt (AES-256-GCM) → hash encrypted bytes (SHA-256) → store hash on blockchain, encrypted diff on IPFS (pin CID). **Verification process:** (1) Get IPFS CID from blockchain metadata. (2) Retrieve encrypted diff from IPFS. (3) Compute hash of encrypted diff. (4) Query blockchain for stored hash. (5) Compare hashes; if match, decrypt and use diff; if mismatch, integrity violation.
 
-1. Client computes weight diff (delta between old/new weights)
-2. Encrypt diff (AES-256-GCM) - provides confidentiality and authenticated encryption
-3. Compute hash of encrypted diff (SHA-256 of encrypted bytes)
-4. Store hash on blockchain - immutable record, part of smart contract state
-5. Store encrypted diff on IPFS - upload to IPFS network, get Content Identifier (CID), pin CID to ensure persistence
-
-**Verification Process:**
-
-1. Get IPFS CID from blockchain metadata
-2. Retrieve encrypted diff from IPFS using CID
-3. Compute hash of encrypted diff
-4. Query blockchain for stored hash
-5. Compare hash of encrypted diff with blockchain hash
-6. If match: decrypt and use diff
-7. If mismatch: integrity violation detected
-
-**Benefits:**
-
-- Blockchain hash provides integrity verification (like JWT signature)
-- Encryption provides confidentiality (better than JWT)
-- No size limitations
-- Off-chain storage is efficient for large diffs
-- Aligns with proposal's "hybrid storage" approach
+**Benefits:** Blockchain hash provides integrity (like a signature); encryption provides confidentiality; no size limitations for diffs; off-chain storage efficient for large payloads; aligns with proposal's hybrid storage approach.
 
 ## Dataset Separation: Training vs Test
 
-### Key Principle
+### Principle
 
-**Global test/validation datasets are ONLY in the main service. Clients NEVER see the global test data.**
+Global test/validation datasets exist **only** in the main service. Clients have **training data only** and never see the global test set. Training only requires training data (gradients from training loss); test data is for evaluation. Clients may optionally split their local training data into train/val for early stopping or local monitoring — that subset remains part of their training data, not the global test set.
 
-**Important:** Clients can train effectively without the global test data because:
-
-- Training only requires training data (to compute gradients/weight updates)
-- Test data is only for evaluation, not for training
-- Clients can optionally split their local training data into train/val for local monitoring
-- The global test set remains independent for fair evaluation
-
-This separation:
-
-- Prevents data leakage (clients can't overfit to global test data)
-- Ensures fair evaluation (test data is independent)
-- Aligns with federated learning best practices
-- Supports research question RQ2 (reproducibility)
-
-### Dataset Distribution
-
-**Client Service (Training Only):**
-
-**What clients have:**
-
-- Training datasets only
-- Local data for model training
-- Different clients can have different training datasets
-- Clients compute weight updates (diffs) from training
-
-**What clients DON'T have:**
-
-- Global test datasets (main service has these)
-- Global validation datasets (main service has these)
-
-**What clients CAN have (optional):**
-
-- Local validation split from their training data (for early stopping, monitoring)
-  - This is a subset of their training data, not the global test set
-  - Used only for local training optimization
-  - Does not affect the independence of the global test set
-
-**Main Service (Test/Validation Only):**
-
-**What main service has:**
-
-- Test/validation datasets only
-- Used to evaluate model performance
-- Never used for training
-
-**What main service DOESN'T have:**
-
-- Training datasets (clients have these)
-- Client-specific data
+**What clients have:** Training datasets; local data for training; different clients can have different training data. **What main service has:** Test/validation datasets only; used for evaluation, never for training.
 
 ### How Clients Train Without Test Data
 
-**Why This Works:**
+Training only requires training data: gradients are computed from training loss on training batches; weight updates come from those gradients. Test data is used for evaluation after updates, not for gradient computation. This is standard in ML (train/test split). Clients may optionally split their own training data (e.g. 80/20) for local validation, early stopping, or monitoring — that subset is still part of their training data, not the global test set.
 
-**Training only requires training data** because:
+### Complete Training Iteration (Data Perspective)
 
-1. Gradient computation only needs training examples - loss is computed on training batches, gradients are computed from training loss, weight updates come from gradients
-2. Test data is for evaluation, not training - test data is used to measure model performance, it doesn't contribute to weight updates, it's only needed after training is complete
-3. This is standard in machine learning - train/test split is fundamental to ML, models are trained on training data, performance is evaluated on test data, same principle applies to federated learning
+**Step 1 — Main service → clients:** Task: "Train with current weights"; payload: weights_location (IPFS CID).
 
-**Optional: Local Validation Split**
+**Step 2 — Clients (training):** Load local training dataset and weights from IPFS; train model; compute diff; publish diff to queue.
 
-Clients can optionally split their training data for local monitoring. They can split their own training data (e.g., 80/20 split) and use the validation portion for early stopping (stop if validation loss stops improving), local monitoring (track training progress), and hyperparameter tuning (if needed).
+**Step 3 — Main service (aggregation):** Collect diffs from multiple clients; aggregate (FedAvg); publish aggregated diff.
 
-**Key Point:** Local validation is a subset of the client's training data, NOT the global test set. This is different from the global test set which is an independent dataset in main service.
+**Step 4 — Main service (validation):** Load test dataset (main service only); apply aggregated diff to model; evaluate on test data; record result on blockchain.
 
-### Complete Training Iteration
+**Step 5 — Decision:** Evaluate validation results using rollback strategy. If accuracy acceptable: continue training (publish next TRAIN) or complete (TRAINING_COMPLETE). If rollback needed: rollback to last best checkpoint.
 
-**Step 1:** Main Service → Client
+### Benefits of This Separation
 
-- Task: "Train with current weights"
-- Payload: weights_location (IPFS CID)
+- **Prevents data leakage:** Clients cannot use test data for training; test data remains independent; critical for fair evaluation.
+- **Supports federated learning:** Each client trains on their own data; no central training dataset; true federated scenario.
+- **Enables reproducibility (RQ2):** Test dataset is fixed and versioned; same test data for all validations; reproducible evaluation.
+- **Regulatory compliance:** Clear separation of training vs evaluation data; audit trail shows which data was used when; supports EU AI Act requirements.
 
-**Step 2:** Client (Training)
+### Test Dataset Versioning
 
-- Loads training dataset (local)
-- Loads weights from IPFS storage
-- Trains model
-- Computes diff
-- Publishes diff to queue
+Version and hash test datasets; record test dataset hash and version in RecordValidation on-chain so reproducibility and auditability are clear.
 
-**Step 3:** Main Service (Aggregation)
+## Dataset Splitting (e.g. MNIST)
 
-- Collects diffs from multiple clients
-- Aggregates (FedAvg)
-- Publishes aggregated diff
+**MNIST:** 60,000 training samples, 10,000 test. **Split configuration:** e.g. 2 clients → 30,000 training samples each; 4 clients → 15,000 each; main service holds full test set (10,000), never split. Dataset-agnostic design allows other datasets (CIFAR-10, custom) via the same interface.
 
-**Step 4:** Main Service (Validation)
+**IID (default):** Shuffle full training set, split evenly into N parts. Each client gets a random sample with all classes. Pros: simpler, good for baseline. Cons: less realistic than non-IID in many FL scenarios.
 
-- Loads TEST dataset (main service only!)
-- Applies aggregated diff
-- Evaluates on test data
-- Records result on blockchain
+**Non-IID (optional):** Split by class or other criteria (e.g. Client 1: mostly classes 0–4, Client 2: mostly 5–9). Pros: more realistic, tests FL robustness, better for research. Cons: more complex, can be harder to train.
 
-**Step 5:** Decision
+**Dataset abstraction:** Interface: `load_training_data()`, `load_test_data()`, `split_for_federation(num_clients, split_type='iid')`. Implementations: e.g. MNISTDataset; extendable to CIFAR10, custom. **Client configuration:** Each client loads its assigned portion (e.g. `data/mnist/train/client_X.pt`); client ID determines which split. **Main service:** Loads full test set (e.g. `test/test.pt`); never touches training data.
 
-- Evaluates validation results using rollback strategy (see Rollback Strategy section)
-- If accuracy acceptable: Continue training
-- If rollback needed: Rollback to last best checkpoint
+**IID split algorithm:** (1) Load full training set. (2) Shuffle randomly (with seed). (3) Split into N equal parts. (4) Save each part to e.g. `data/mnist/train/client_X.pt`. (5) Each client gets a random sample containing all classes. **Non-IID (class-based example):** (1) Group training samples by class (0–9 for MNIST). (2) Distribute classes among clients (e.g. Client 1: 0–4, Client 2: 5–9). (3) Save each client's portion; include class distribution in config. **Benefits:** Dataset-agnostic; supports IID and non-IID for research; easy to scale client count; clear train/test separation.
 
-### Dataset Splitting Strategy
+### Data Preprocessing and Preparation
 
-The system is designed to be dataset-agnostic, starting with MNIST as the initial dataset. The training dataset is split among clients to simulate federated learning scenarios.
+**Script:** `scripts/prepare_datasets.py` — one-time preparation of split data and configs.
 
-**MNIST Dataset:**
+**Usage:**  
+`python scripts/prepare_datasets.py --dataset mnist --num_clients 2 --split_type iid --output_dir data/mnist`  
+`python scripts/prepare_datasets.py --dataset mnist --num_clients 4 --split_type non_iid --output_dir data/mnist`
 
-- 60,000 training samples
-- 10,000 test samples
+**Parameters:** `--dataset` (mnist, cifar10, …), `--num_clients`, `--split_type` (iid, non_iid), `--output_dir`, optional `--seed`.
 
-**Split Configuration:**
-
-- 2 clients: Each client gets 30,000 training samples (60,000 / 2)
-- 4 clients: Each client gets 15,000 training samples (60,000 / 4)
-- Main service: Full test set of 10,000 samples (never split)
-
-**Two Split Types Supported:**
-
-**1. IID (Independent and Identically Distributed) Split (Default):**
-
-- Randomly shuffle the full training dataset
-- Split evenly into N equal parts (N = number of clients)
-- Each client gets a random sample containing all classes (digits 0-9)
-- Pros: Simpler, good for initial testing and baseline performance
-- Cons: Less realistic (real-world federated scenarios are often non-IID)
-
-**2. Non-IID Split (Optional, for research):**
-
-- Split by class or other criteria to simulate realistic federated scenarios
-- Common approaches:
-  - Class-based split: Each client gets 2-3 classes primarily (e.g., Client 1: mostly digits 0-4, Client 2: mostly digits 5-9)
-  - Quantity-based non-IID: Each client gets different amounts of each class
-  - Shard-based: Divide dataset into shards, assign shards to clients
-- Pros: More realistic, tests federated learning robustness, better for research
-- Cons: More complex, potentially harder to train
-
-**Implementation Approach:**
-
-**Dataset Abstraction Layer:**
-
-- Create a dataset interface that supports multiple datasets
-- `load_training_data()` - Returns full training data
-- `load_test_data()` - Returns full test data
-- `split_for_federation(num_clients, split_type='iid')` - Splits training data for clients
-
-**Dataset Implementations:**
-
-- `MNISTDataset` - Implements interface for MNIST (initial dataset)
-- Can extend to `CIFAR10Dataset`, `CustomDataset`, etc. for future datasets
-
-**Client Configuration:**
-
-- Each client loads its assigned portion of the training dataset
-- Dataset path/config specifies which portion to load
-- Client ID determines which split to use
-- Example: Client 1 loads `data/mnist/client_1_train.pt` (30,000 samples for 2-client setup)
-
-**Main Service Configuration:**
-
-- Loads full test dataset (10,000 samples for MNIST)
-- Never touches training data
-- Example: `test_dataset_path: "data/mnist/test.pt"`
-
-**IID Split Algorithm:**
-
-1. Load full training dataset (60,000 samples for MNIST)
-2. Shuffle randomly
-3. Split into N equal parts (N = number of clients)
-4. Save each part to separate files
-5. Each client loads its assigned part
-
-**Non-IID Split Algorithm (Class-based example):**
-
-1. Group training samples by class (0-9 for MNIST)
-2. Distribute classes among clients (e.g., Client 1: classes 0-4, Client 2: classes 5-9)
-3. Each client gets samples primarily from their assigned classes
-4. Save each client's portion to separate files
-
-**Benefits:**
-
-- Dataset-agnostic design allows switching to other datasets (CIFAR-10, custom datasets)
-- Supports both IID and non-IID scenarios for comprehensive research
-- Easy to scale number of clients (2, 4, 8, etc.)
-- Enables comparison of IID vs non-IID performance
-- Maintains clear separation between training and test data
-
-### Data Preprocessing and Dataset Preparation
-
-Before training begins, datasets must be preprocessed and split for federated learning. This is a one-time setup step that prepares data files for each client and the main service.
-
-**Preprocessing Script:**
-
-A helper script (`scripts/prepare_datasets.py`) handles dataset preparation:
-
-- Loads the full dataset (e.g., MNIST)
-- Splits training data according to configuration (IID or non-IID, number of clients)
-- Saves each client's portion to separate files
-- Saves test set for main service
-- Generates configuration files for clients and main service
-- Creates dataset metadata (hashes, statistics)
-
-**Script Usage:**
-
-Command-line interface for dataset preparation:
-
-- `python scripts/prepare_datasets.py --dataset mnist --num_clients 2 --split_type iid --output_dir data/mnist`
-- `python scripts/prepare_datasets.py --dataset mnist --num_clients 4 --split_type non_iid --output_dir data/mnist`
-
-**Parameters:**
-
-- `--dataset`: Dataset name (mnist, cifar10, etc.)
-- `--num_clients`: Number of clients to split data for
-- `--split_type`: iid or non_iid
-- `--output_dir`: Directory to save split datasets
-- `--seed`: Random seed for reproducibility (optional)
-
-**Output Structure:**
-
-After preprocessing, the following structure is created:
+**Output structure:**
 
 ```
 data/mnist/
 ├── train/
-│   ├── client_0.pt          # Client 0's training data (30,000 samples for 2 clients)
-│   ├── client_1.pt          # Client 1's training data (30,000 samples for 2 clients)
-│   └── metadata.json        # Dataset metadata (splits, hashes, statistics)
+│   ├── client_0.pt, client_1.pt, ...
+│   └── metadata.json
 ├── test/
-│   └── test.pt              # Full test set (10,000 samples) for main service
+│   └── test.pt
 └── config/
-    ├── client_0_config.json # Client 0 configuration
-    ├── client_1_config.json # Client 1 configuration
-    └── main_service_config.json # Main service configuration
+    ├── client_0_config.json, client_1_config.json, ...
+    └── main_service_config.json
 ```
 
-**Client Configuration Files:**
+**Client config (e.g. client_X_config.json):** client_id, dataset_path, dataset_size, split_type, classes_distribution (non-IID), dataset_hash. **Main service config:** test_dataset_path, test_dataset_size, test_dataset_hash, dataset_version.
 
-Each client configuration file (`client_X_config.json`) contains:
+**Process (IID):** Load full training set → shuffle (seed) → split into N parts → save client_*.pt → hashes and configs → save test set and main config. **Process (Non-IID):** Group by class → distribute classes across clients → save per-client files and configs with class distribution.
 
-- `client_id`: Unique client identifier
-- `dataset_path`: Path to client's training data file
-- `dataset_size`: Number of samples in client's dataset
-- `split_type`: IID or non-IID
-- `classes_distribution`: Distribution of classes in client's data (for non-IID)
-- `dataset_hash`: SHA-256 hash of client's dataset file (for integrity)
+**Dataset metadata (metadata.json):** dataset_name, total_training_samples, total_test_samples, num_clients, split_type, split_seed, client_splits (client IDs and sample counts), created_at, hashes for integrity.
 
-**Main Service Configuration:**
+**Startup:** Clients read their config, load dataset, verify hash. Main service reads main config, loads test set, verifies hash. One-time preprocessing; reproducible with seed; easy to scale clients or switch IID/non-IID; dataset-agnostic (works with any dataset implementing the interface).
 
-Main service configuration file (`main_service_config.json`) contains:
+**Client startup:** Client reads its config file, loads dataset from path in config, verifies dataset hash, and is ready to participate. **Main service startup:** Reads main config, loads test dataset, verifies test dataset hash, ready to validate.
 
-- `test_dataset_path`: Path to test dataset file
-- `test_dataset_size`: Number of test samples (10,000 for MNIST)
-- `test_dataset_hash`: SHA-256 hash of test dataset file
-- `dataset_version`: Version identifier for reproducibility
+**Benefits of preprocessing:** One-time step before training; clients know their data at startup; reproducible splits (seed); integrity verification (hash checking); easy to switch IID/non-IID or scale client count; dataset-agnostic; clear separation of concerns (preprocessing vs training).
 
-**Preprocessing Process:**
+**Preprocessing process (IID):** Load full training set → shuffle with seed → split into N equal parts → save each part to `train/client_X.pt` → compute hashes → generate client and main configs. **(Non-IID):** Load full training set → group by class → distribute classes among clients → save per-client files → compute statistics and configs with class distribution.
 
-**1. IID Split Process:**
-
-1. Load full training dataset (60,000 samples for MNIST)
-2. Shuffle randomly with seed for reproducibility
-3. Split into N equal parts (N = number of clients)
-4. Save each part to `data/mnist/train/client_X.pt`
-5. Compute hash for each client file
-6. Generate client configuration files
-7. Save test set to `data/mnist/test/test.pt`
-8. Generate main service configuration
-
-**2. Non-IID Split Process:**
-
-1. Load full training dataset
-2. Group samples by class (0-9 for MNIST)
-3. Distribute classes among clients according to strategy:
-   - Class-based: Client 1 gets classes 0-4, Client 2 gets classes 5-9
-   - Or other distribution strategy
-4. Save each client's portion to separate files
-5. Compute statistics (class distribution per client)
-6. Generate client configuration files with class distribution
-7. Save test set (unchanged, contains all classes)
-8. Generate main service configuration
-
-**3. Dataset Metadata:**
-
-Metadata file (`metadata.json`) contains:
-
-- `dataset_name`: Name of dataset (mnist)
-- `total_training_samples`: Total training samples (60,000)
-- `total_test_samples`: Total test samples (10,000)
-- `num_clients`: Number of clients
-- `split_type`: IID or non-IID
-- `split_seed`: Random seed used for splitting
-- `client_splits`: List of client IDs and their sample counts
-- `created_at`: Timestamp of preprocessing
-- `hashes`: Dictionary of file hashes for integrity verification
-
-**Client Startup:**
-
-When a client service starts:
-
-1. Reads its configuration file (`client_X_config.json`)
-2. Loads dataset from path specified in configuration
-3. Verifies dataset hash matches configuration (integrity check)
-4. Knows exactly which data it has (size, class distribution)
-5. Ready to participate in federated training
-
-**Main Service Startup:**
-
-When main service starts:
-
-1. Reads main service configuration file
-2. Loads test dataset from specified path
-3. Verifies test dataset hash matches configuration
-4. Knows test dataset version for reproducibility
-5. Ready to validate models
-
-**Benefits:**
-
-- One-time preprocessing step before training
-- Clients know their data at startup (no runtime discovery)
-- Reproducible splits (seed-based)
-- Integrity verification (hash checking)
-- Easy to switch between IID and non-IID
-- Easy to scale number of clients (re-run preprocessing)
-- Dataset-agnostic (works with any dataset that implements the interface)
-- Clear separation of concerns (preprocessing vs training)
-
-**Example Workflow:**
-
-1. **Preprocessing (one-time):**
-
-   ```bash
-   python scripts/prepare_datasets.py --dataset mnist --num_clients 2 --split_type iid
-   ```
-
-2. **Client 0 starts:**
-
-   - Reads `data/mnist/config/client_0_config.json`
-   - Loads `data/mnist/train/client_0.pt` (30,000 samples)
-   - Verifies hash matches config
-   - Ready to train
-
-3. **Client 1 starts:**
-
-   - Reads `data/mnist/config/client_1_config.json`
-   - Loads `data/mnist/train/client_1.pt` (30,000 samples)
-   - Verifies hash matches config
-   - Ready to train
-
-4. **Main service starts:**
-   - Reads `data/mnist/config/main_service_config.json`
-   - Loads `data/mnist/test/test.pt` (10,000 samples)
-   - Verifies hash matches config
-   - Ready to validate
-
-### Benefits of This Separation
-
-**1. Prevents Data Leakage:** Clients can't accidentally use test data for training, ensures test data remains independent, critical for fair evaluation.
-
-**2. Supports Federated Learning:** Each client trains on their own data, no central training dataset, true federated scenario.
-
-**3. Enables Reproducibility (RQ2):** Test dataset is fixed and versioned, same test data used for all validations, can reproduce evaluation results.
-
-**4. Regulatory Compliance:** Clear separation of training vs evaluation data, audit trail shows which data was used when, supports EU AI Act requirements.
-
-### Test Dataset Versioning
-
-**Important:** Test datasets should be versioned and their hashes stored on-chain. When validating, record which test dataset was used including test dataset hash and test dataset version. Store this on blockchain via RecordValidation function.
-
-This ensures:
-
-- Reproducibility (same test dataset = comparable results)
-- Auditability (can verify which test data was used)
-- Research validity (consistent evaluation methodology)
+**Example workflow:** (1) Run `python scripts/prepare_datasets.py --dataset mnist --num_clients 2 --split_type iid`. (2) Client 0 loads `client_0_config.json` and `train/client_0.pt`; Client 1 loads `client_1_config.json` and `train/client_1.pt`; main service loads `main_service_config.json` and `test/test.pt`. (3) All verify hashes and are ready to train or validate.
 
 ## Security Considerations
 
 ### Encryption Strategy
 
-**1. Diff Encryption:**
-
-- Use AES-256-GCM for authenticated encryption
-- Key management: Encryption keys stored via ENCRYPTION_KEY environment variable (Base64-encoded 32-byte keys)
-- Each version can have unique encryption key
-
-**2. Integrity Verification:**
-
-- On-chain: Hash of encrypted diff
-- IPFS CID: Content hash (additional integrity layer)
-- Verification: Decrypt → Compute hash → Compare with on-chain hash
-- Prevents tampering with IPFS storage
-
-**3. Access Control:**
-
-- Permissioned blockchain (Hyperledger Fabric)
-- Simple authentication for queue access (API keys)
-- Basic client identification (client IDs in configuration)
-- IPFS content is encrypted (only authorized parties can decrypt)
+- **Diff encryption:** AES-256-GCM for authenticated encryption. Key management via `ENCRYPTION_KEY` environment variable (Base64-encoded 32-byte key). Each version can use a unique key.
+- **Integrity verification:** Hash of encrypted diff stored on-chain; IPFS CID provides additional integrity. Verification: retrieve from IPFS → compute hash → compare with on-chain hash before decrypt.
+- **Access control:** Permissioned blockchain (Hyperledger Fabric); API keys for queue access; client IDs in configuration; IPFS content is encrypted so only authorized parties can decrypt.
 
 ## Queue Design
 
 ### Task Types
 
-- TRAIN: Client training task
-- AGGREGATE: Aggregation task
-- BLOCKCHAIN_WRITE: Blockchain transaction
-- STORAGE_WRITE: Off-chain storage
-- VALIDATE: Model validation
-- ROLLBACK: Model rollback
-- DECISION: Post-validation decision
-- TRAINING_COMPLETE: Final task indicating training is done and model is ready
+TRAIN (client training), AGGREGATE, BLOCKCHAIN_WRITE, STORAGE_WRITE, VALIDATE, ROLLBACK, DECISION, TRAINING_COMPLETE (final task when model is ready).
 
 ### Task Message Format
 
-Task messages include: task_id (unique identifier), task_type (one of the types above), model_version_id, parent_version_id, payload (task-specific data including weights_cid for training tasks, client_updates for aggregation, blockchain_hash for storage tasks, ipfs_cid for validation tasks, validation_result for decision tasks, final_model_info for training completion tasks), and metadata (created_at timestamp, priority, retry_count).
+**Common fields:** task_id, task_type, model_version_id, parent_version_id, payload (task-specific), metadata (created_at, priority, retry_count).
 
-For TRAINING_COMPLETE tasks, the payload includes final_model_info containing: final_model_version_id, final_accuracy, final_metrics (loss, precision, recall, etc.), final_weights_cid (IPFS CID of final model weights), training_summary (total_iterations, clients_participated, training_duration, total_rounds), and metadata (hyperparameters_used, dataset_info, completion_reason).
+**Payload by type:** TRAIN — weights_cid. AGGREGATE — client_updates. After blockchain — blockchain_hash. After storage — ipfs_cid. After validation — validation_result. TRAINING_COMPLETE — final_model_info containing: final_model_version_id, final_accuracy, final_metrics (loss, precision, recall, etc.), final_weights_cid (IPFS CID of final model weights), training_summary (total_iterations, clients_participated, training_duration, total_rounds), metadata (hyperparameters_used, dataset_info, completion_reason).
 
-## Performance Optimization
+## Performance (RQ3)
 
-### For RQ3 (Performance Analysis)
+**Metrics to track:** End-to-end latency (client update → validation complete), blockchain transaction latency, storage operation latency, queue processing time, throughput (updates per second).
 
-**Metrics to Track:**
+**Optimization strategies:** Batch blockchain transactions; parallel validation workers; caching of frequently accessed model weights; compression of weight diffs.
 
-- End-to-end latency (client update → validation complete)
-- Blockchain transaction latency
-- Storage operation latency
-- Queue processing time
-- Throughput (updates per second)
+## Technology Stack & Project Structure
 
-**Optimization Strategies:**
+### Stack
 
-- Batch blockchain transactions (multiple updates in one transaction)
-- Parallel validation workers
-- Caching of frequently accessed model weights
-- Compression of weight diffs
-
-## Implementation Recommendations
-
-### Technology Stack
-
-- **Language:**
-  - Python 3.10+ (main service, client service, workers)
-  - Go 1.19+ (Hyperledger Fabric chaincode/smart contracts only)
+- **Languages:** Python 3.10+ (main service, client service, workers), Go 1.19+ (blockchain service and Fabric chaincode)
 - **Queue:** RabbitMQ
 - **Blockchain:** Hyperledger Fabric 2.5+
-- **Storage:** IPFS (InterPlanetary File System)
-  - Python library: httpx (async HTTP client for IPFS API)
-  - IPFS daemon: Run locally or connect to network
-- **ML Framework:** PyTorch
-- **Federated Learning:** PySyft
+- **Storage:** IPFS (Python: httpx for IPFS API; run IPFS daemon locally or connect to network)
+- **ML:** PyTorch
 - **API:** FastAPI
-- **UI:** React (optional, for monitoring)
+- **UI:** Optional React for monitoring
 
 ### Project Structure
 
-- main_service/ (Python)
-  - workers/ (aggregation_worker.py, storage_worker.py, validation_worker.py, rollback_worker.py)
-  - api/ (server.py, routes.py)
-  - blockchain/ (fabric_client.py - HTTP client for blockchain-service)
-  - requirements.txt
-  - Dockerfile
-- blockchain_service/ (Go)
-  - main.go (REST API server)
-  - go.mod, go.sum
-  - Dockerfile
-  - README.md
-- client_service/ (Python)
-  - training/ (trainer.py, model.py)
-  - queue/ (consumer.py)
-  - config.py
-  - requirements.txt
-  - Dockerfile
-- shared/ (Python)
-  - models/ (task.py)
-  - utils/ (crypto.py, hashing.py)
-  - storage/ (ipfs_client.py, encryption.py)
-  - datasets/ (dataset_interface.py, mnist_dataset.py)
-  - config/ (settings.py)
-  - logger/
-- scripts/
-  - generate_encryption_key.py
-- data/ (created at runtime)
-  - mnist/ (downloaded by torchvision)
-- tests/
-- docker-compose.yml
+- **main_service/** (Python): workers/ (aggregation_worker, storage_worker, validation_worker, rollback_worker), api/ (server, routes), blockchain/ (HTTP client for blockchain-service), requirements.txt, Dockerfile
+- **blockchain_service/** (Go): main.go (REST API), go.mod, go.sum, chaincode/model_provenance.go, Dockerfile, README
+- **client_service/** (Python): training/ (trainer, model), queue/ (consumer), config, requirements.txt, Dockerfile
+- **shared/** (Python): models/ (task), utils/ (crypto, hashing), storage/ (ipfs_client, encryption), datasets/ (dataset_interface, mnist_dataset), config/ (settings), logger/
+- **scripts/:** generate_encryption_key.py, prepare_datasets.py
+- **data/** (runtime), **tests/**, **docker-compose.yml**
+
+---
+
+## Additional Detail
+
+### Rollback Strategy (Detail)
+
+**Accuracy comparison:** Compare current model accuracy with previous best; track accuracy history for all model versions. Accuracy is the primary metric for rollback decisions.
+
+**Tolerance and patience:** Allow accuracy to drop by a small amount (e.g. 0.5–1%) before concern. Track consecutive iterations where accuracy is below best; increment patience each time. If patience exceeds threshold (e.g. 3–5), trigger rollback. Maintain reference to the last "best" model version as rollback target.
+
+**Rollback decision logic:** (1) **Immediate rollback:** If accuracy drops by more than tolerance (e.g. >2%), rollback to previous best. (2) **Patience-based:** If within tolerance but below best for N consecutive iterations, rollback after patience threshold. (3) **No rollback:** If accuracy improves or acceptable, reset patience and update best checkpoint. When rollback is triggered, roll back to last safe checkpoint (may be several iterations back); discard intermediate versions; training resumes from best checkpoint.
+
+### Post-Rollback Workflow (Detail)
+
+1. **Rollback execution:** Rollback worker retrieves target weights from IPFS, updates blockchain state (current model pointer = rolled-back version), records rollback event, publishes rollback notification to queue.
+2. **Client notification:** All clients receive ROLLBACK task (target version ID, IPFS CID of rolled-back weights). Clients read task, download weights from IPFS, replace local weights, discard local changes after cutoff, acknowledge.
+3. **Training continuation:** Main service publishes new TRAIN task with rolled-back weights CID. All clients load rolled-back weights and continue from same state. Synchronization: main service can wait for client acknowledgements before new round.
+4. **Clients that contributed after cutoff:** They receive rollback notification, discard local model state, load rolled-back weights from IPFS, continue from rolled-back state; their previous contributions remain on blockchain for audit.
+5. **State reset:** Best checkpoint = rolled-back version; patience = 0; accuracy tracking restarts.
+
+### Training Completion (Detail)
+
+**Criteria (expanded):** (1) **Accuracy threshold:** Target accuracy (e.g. 95%) reached; configurable. (2) **Convergence:** No improvement for N consecutive iterations (e.g. 10); configurable. (3) **Max iterations:** Predefined max rounds (e.g. 100). (4) **Max rollbacks:** Max rollbacks exceeded; best model marked final; may indicate need for investigation. (5) **Manual trigger:** Operator triggers via API/UI. (6) **Overtraining prevention:** Monitor validation vs training accuracy; early stopping if validation plateaus or train/val gap exceeds threshold.
+
+**Process when completion is met:** (1) Decision worker detects completion. (2) Publishes TRAINING_COMPLETE (final version ID, accuracy/metrics, IPFS CID, summary, completion reason). (3) Final state recorded on blockchain. (4) API/UI notified. (5) Training stops; no new TRAIN tasks. (6) Model marked ready.
+
+### Dataset Distribution (Summary)
+
+**Clients:** Training datasets only; local data for model training; different clients can have different training data; optional local train/val split from their own data for early stopping or monitoring (subset of training data, not global test set).
+
+**Main service:** Test/validation datasets only; used to evaluate model performance; never used for training. Test dataset is fixed and versioned for reproducibility; record test dataset hash/version on-chain when validating.
+
+### Data Preprocessing (Detail)
+
+**Script:** `scripts/prepare_datasets.py` — loads full dataset, splits training data (IID or non-IID, number of clients), saves per-client files and test set, generates configs and metadata.
+
+**IID process:** Load full training set → shuffle with seed → split into N equal parts → save `train/client_X.pt` → compute hashes → generate client configs (client_id, dataset_path, dataset_size, split_type, dataset_hash) and main config (test_dataset_path, test_dataset_size, test_dataset_hash, dataset_version) → save test set and metadata (dataset_name, total_training_samples, total_test_samples, num_clients, split_type, split_seed, client_splits, created_at, hashes).
+
+**Non-IID process:** Load full training set → group by class → distribute classes among clients (e.g. class-based or shard-based) → save per-client files → compute statistics (class distribution) → generate configs with class distribution → save test set and metadata.
+
+**Client startup:** Read config → load dataset from path in config → verify dataset hash → ready to train. **Main service startup:** Read main config → load test set → verify test dataset hash → ready to validate.
+
+**Benefits:** One-time preprocessing; reproducible (seed); integrity (hash check); easy to change IID/non-IID or number of clients; dataset-agnostic; clear separation of concerns.
+
+### Queue Task Payloads (Reference)
+
+**TRAIN:** weights_cid (IPFS CID of current weights). **AGGREGATE:** client_updates (list of client diffs). **BLOCKCHAIN_WRITE:** after write, payload includes blockchain_hash. **STORAGE_WRITE:** after storage, payload includes ipfs_cid. **VALIDATE:** after validation, payload includes validation_result. **DECISION:** payload includes validation result for decision logic. **TRAINING_COMPLETE:** final_model_info (final_model_version_id, final_accuracy, final_metrics, final_weights_cid, training_summary, metadata, completion_reason).
+
+### Smart Contract Data (Reference)
+
+**ModelVersion (on-chain):** version_id, parent_version_id, timestamp, iteration, num_clients, client_ids, aggregated_hash, diff_hash, off_chain_location, hyperparameters, validation_status, validation_metrics, block_number. **ValidationRecord:** version_id, validator_id, passed, metrics, test_dataset_hash, timestamp. **RollbackEvent:** from_version_id, to_version_id, reason, triggered_by, timestamp, type. **Not on-chain:** model weights, diffs, raw training data, full binaries.
+
+### IPFS and Diff Storage (Detail)
+
+**IPFS storage:** (1) Encrypt diff (AES-256-GCM). (2) Upload to IPFS → get CID. (3) Pin CID. (4) Store CID in blockchain metadata. (5) Verify hash of encrypted diff matches blockchain hash. **Retrieval:** Get CID from metadata → fetch from IPFS → verify hash → decrypt → apply to weights. **IPFS benefits:** Content-addressed (CID = content hash); decentralized; immutable; open source; local node for development (e.g. `ipfs daemon`, API http://localhost:5001).
+
+**Diff storage (why not JWT):** JWT is for authentication; payloads are base64, not encrypted; size limits unsuitable for weight diffs. **Process:** Client computes diff → encrypt (AES-256-GCM) → hash encrypted bytes → store hash on-chain, encrypted diff on IPFS. **Verification:** Get CID → retrieve from IPFS → compute hash → compare with on-chain hash → decrypt if match. **Benefits:** Blockchain hash = integrity; encryption = confidentiality; no size limit; hybrid storage.
+
+### Security (Detail)
+
+**Encryption:** AES-256-GCM for diffs; key via ENCRYPTION_KEY (Base64 32-byte); per-version keys possible. **Integrity:** On-chain hash of encrypted diff; IPFS CID; verify after retrieval before decrypt. **Access:** Permissioned Fabric; API keys for queue; client IDs in config; IPFS content encrypted so only authorized parties decrypt.
+
+### Configuration Parameters (Reference)
+
+**Rollback:** accuracy_tolerance, patience_threshold, min_accuracy_threshold, metrics_to_track. **Training completion:** target_accuracy, convergence_patience, max_iterations, max_rollbacks, overtraining_threshold, early_stopping_enabled. **Dataset preparation:** --dataset, --num_clients, --split_type, --output_dir, --seed (optional).
+
+### Processing Pipeline (Step-by-step)
+
+**Step 1 — Aggregation:** Read client updates from queue → FedAvg → publish aggregated update. **Step 2 — Blockchain:** Read aggregated update → hash encrypted diff → call blockchain-service → Fabric invokes chaincode → store version/parent/hash/timestamp/metadata on-chain → publish task with blockchain hash. **Step 3 — Storage:** Read task → encrypt diff → upload to IPFS → get CID → verify hash → pin CID → publish task with CID. **Step 4 — Validation:** Read task → get diff from IPFS → decrypt → apply to previous weights → run test set (main service only) → record validation on blockchain → publish result. **Step 5 — Decision:** Read result → apply rollback strategy → if rollback: rollback or regression diagnosis; if pass: check completion → publish next TRAIN or TRAINING_COMPLETE → update registry. **Step 6 — Completion:** TRAINING_COMPLETE contains final version, metrics, CID, summary; consumed by API/UI; final state on blockchain.
+
+### Example Workflows
+
+**Preprocessing:** Run `prepare_datasets.py --dataset mnist --num_clients 2 --split_type iid`. Clients load `config/client_X_config.json` and `train/client_X.pt`; main loads `config/main_service_config.json` and `test/test.pt`; all verify hashes. **One training iteration:** Main sends TRAIN (weights CID) → clients train and publish diffs → aggregation → blockchain → storage → validation on test set → decision → next TRAIN or complete. **Rollback:** Validation detects regression → rollback worker loads target weights from IPFS → updates blockchain → publishes ROLLBACK → all clients load rolled-back weights → main publishes new TRAIN with rolled-back CID.
+
+### References and Related Docs
+
+- [SETUP.md](SETUP.md) — Setup and run instructions.
+- `docs/REGRESSION_DIAGNOSIS.md` — Regression diagnosis in depth.
+- `blockchain_service/README.md` — Blockchain service and chaincode.
+- `env_template.txt` / `.env` — Environment variables (ENCRYPTION_KEY, API_KEY, queue, IPFS, etc.).
+
+### API and Environment Quick Reference
+
+**Blockchain service API:** POST /api/v1/model/register (register model version), POST /api/v1/model/validate (record validation), POST /api/v1/model/rollback (record rollback), GET /api/v1/model/provenance/{version_id} (provenance chain), GET /health. **Main service API:** POST /api/v1/models/{version_id}/rollback for manual rollback (API key required). **Environment:** ENCRYPTION_KEY (Base64 32-byte), API_KEY (for API auth), queue URL (RabbitMQ), IPFS API endpoint (e.g. http://localhost:5001), blockchain service URL.
+
+### Glossary
+
+**Aggregation (FedAvg):** Federated averaging — combine client weight updates by averaging. **CID:** Content Identifier (IPFS). **Diff:** Weight update (delta between old and new model weights). **Iteration:** One round of client training → aggregation → validation → decision. **Main service:** Aggregator; holds test set; runs workers; coordinates blockchain and IPFS. **Blockchain service:** Go microservice; all Fabric operations. **Client service:** Training service; local data only; publishes diffs. **Provenance:** Lineage of model versions (who, when, what). **Rollback:** Restore model to a previous version. **Tolerance/patience:** Rollback strategy parameters (allow small accuracy drop; allow N bad iterations before rollback). **Validation:** Evaluate model on test set; record result on blockchain.
+
+### Extended Rollback and Completion Reference
+
+**Rollback (automatic):** Compare current accuracy to best; if drop > tolerance or patience exceeded, set current model pointer to last best version; record rollback event on-chain; publish ROLLBACK task so all clients load rolled-back weights; publish new TRAIN from rolled-back state. **Rollback (manual):** Operator calls API or UI with target version and reason; same execution path; type "manual" on-chain. **Completion:** When accuracy threshold, convergence, max iterations, max rollbacks, or manual trigger is met, publish TRAINING_COMPLETE with final version, metrics, CID, summary; record final state on blockchain; stop publishing TRAIN tasks.
+
+### Data Flow (Text Diagram)
+
+```
+Clients --[encrypted diffs]--> Queue --> Aggregation Worker --> Queue
+  --> Blockchain Worker --> Fabric (on-chain) --> Queue
+  --> Storage Worker --> IPFS (encrypted diff, CID) --> Queue
+  --> Validation Worker (test set in main service) --> Queue
+  --> Decision (rollback strategy, completion check)
+  --> [if pass] TRAIN for next iteration or TRAINING_COMPLETE
+  --> [if rollback] ROLLBACK task --> clients load weights --> new TRAIN from rolled-back state
+```
+
+---
 
 ## Addressing Research Questions
 
-### RQ1: Architecture Integration
+**RQ1 (Architecture):** Queue-based microservices with specialized workers. Evidence: system design and implementation. Metrics: system availability, fault tolerance.
 
-**Answer:** Queue-based microservices architecture with specialized workers
+**RQ2 (Traceability & Reproducibility):** Complete provenance chain on blockchain. Evidence: smart contract queries, audit trail logs. Metrics: provenance query time, lineage completeness.
 
-**Evidence:** System design document, implementation code
+**RQ3 (Performance):** Benchmark latency, throughput, storage overhead. Evidence: latency measurements, throughput analysis. See Performance section for metrics and optimization ideas.
 
-**Metrics:** System availability, fault tolerance
+## Architecture Notes and Implementation Priorities
 
-### RQ2: Traceability & Reproducibility
+**Design choices:** (1) Keep sequential pipeline where necessary (e.g. apply diff then validate); parallelise where possible (e.g. multiple blockchain or storage operations). (2) Rollback: worker queries blockchain for previous version, retrieves weights from IPFS, records rollback event, posts new TRAIN task with previous weights. (3) Test dataset: store test dataset hash on-chain, version test datasets, record which dataset was used for each validation.
 
-**Answer:** Complete provenance chain stored on blockchain
+**Implementation phases:**
 
-**Evidence:** Smart contract queries, audit trail logs
+- **Phase 1 (MVP):** Basic queue, client training service, simple aggregation, basic blockchain integration, IPFS storage.
+- **Phase 2 (Core):** Validation worker, rollback mechanism, full smart contract, API/UI for monitoring.
+- **Phase 3 (Research):** Performance benchmarking, provenance queries, comparison with baseline, documentation.
 
-**Metrics:** Provenance query time, lineage completeness
+## Testing Strategy
 
-### RQ3: Performance Implications
-
-**Answer:** Comprehensive performance benchmarking
-
-**Evidence:** Latency measurements, throughput analysis, storage overhead
-
-**Metrics:** See "Performance Optimization" section above
-
-## Architecture Improvements
-
-### Issues Identified and Solutions
-
-**Issue 1: Sequential Processing Bottleneck**
-
-- Solution: Keep sequential where necessary (Apply diff → Validate), but parallelize where possible (Multiple blockchain writes, multiple storage operations)
-
-**Issue 2: Missing Aggregation Step**
-
-- Solution: Add aggregation worker before blockchain write, combine multiple client updates into one aggregated update
-
-**Issue 3: Rollback Mechanism**
-
-- Solution: Rollback worker queries blockchain for previous version, retrieves previous weights from IPFS storage, updates blockchain (rollback event), posts new training task with previous weights
-
-**Issue 4: Test Dataset Management**
-
-- Solution: Store test dataset hash on-chain, version test datasets, record which dataset was used for each validation
-
-### Implementation Priorities
-
-**Phase 1 (MVP):**
-
-1. Basic queue system
-2. Client training service
-3. Simple aggregation
-4. Blockchain integration (basic)
-5. IPFS storage
-
-**Phase 2 (Core Features):**
-
-1. Validation worker
-2. Rollback mechanism
-3. Smart contract (full functionality)
-4. API/UI for monitoring
-
-**Phase 3 (Research):**
-
-1. Performance benchmarking
-2. Provenance queries
-3. Comparison with baseline
-4. Documentation
-
-### Testing Strategy
-
-- **Unit Tests:** Individual workers, encryption, hashing
-- **Integration Tests:** Queue → Worker → Blockchain flow
-- **End-to-End Tests:** Full training iteration
-- **Performance Tests:** Latency, throughput measurements
-- **Security Tests:** Encryption, integrity verification
+- **Unit tests:** Individual workers, encryption, hashing.
+- **Integration tests:** Queue → worker → blockchain flow.
+- **End-to-end:** Full training iteration.
+- **Performance:** Latency and throughput measurements.
+- **Security:** Encryption and integrity verification.
